@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { get_accessToken } from '../auth/auth.js';
 
-const spotifyRouter = Router()
+export const spotifyRouter = Router()
 
 spotifyRouter.get('/now-playing', async (req: Request, res: Response) => {
     const accessToken = await get_accessToken(process.env.SPOTIFY_REFRESH_TOKEN!);

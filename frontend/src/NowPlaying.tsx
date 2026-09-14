@@ -12,10 +12,17 @@ function NowPlaying() {
   const [data, setData] = useState<NowPlayingData | null>(null)
 
   useEffect(() => {
-    fetch('/api/now-playing')
-      .then((res) => res.json())
-      .then(setData)
-      .catch(() => setData({ is_playing: false }))
+    const fetchNowPlaying = () => {
+      fetch('/api/now-playing')
+        .then((res) => res.json())
+        .then(setData)
+        .catch(() => setData({ is_playing: false }))
+    }
+
+    fetchNowPlaying()
+    const interval = setInterval(fetchNowPlaying, 10000)
+
+    return () => clearInterval(interval)
   }, [])
 
   if (!data) {

@@ -1,5 +1,6 @@
 import './App.css'
 import NowPlaying from './NowPlaying'
+import TopArtists from './TopArtists'
 
 function App() {
   return (
@@ -7,7 +8,8 @@ function App() {
       <section id="center">
         <h1>Now playing</h1>
         <NowPlaying />
-        <a href="http://127.0.0.1:3000/login">Log in with Spotify</a>
+        <h1>Top artists</h1>
+        <TopArtists />
       </section>
 
       <div className="ticks"></div>

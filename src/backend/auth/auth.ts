@@ -11,7 +11,7 @@ const authRouter =Router()
 
 authRouter.get('/login', (req:Request,res:Response)=>{
     const state = randomBytes(16).toString('hex');
-    const scope = 'user-read-currently-playing user-read-private'
+    const scope = 'user-read-currently-playing user-read-private user-top-read'
 
 
     const params = new URLSearchParams({
@@ -55,9 +55,14 @@ authRouter.get('/callback', async (req:Request, res: Response) => {
 
     const data = await response.json();
 
+    if (!data.refresh_token) {
+      res.status(400).send(data);
+      return;
+    }
+
     appendFileSync('.env', `\nSPOTIFY_REFRESH_TOKEN=${data.refresh_token}\n`);
 
-    res.send('Refresh token saved to .env');
+    res.redirect('http://localhost:5173');
   }
 });
 
