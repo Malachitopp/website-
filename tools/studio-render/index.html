@@ -11,12 +11,16 @@
 
   Not part of the site. Run `node tools/studio-render/render.mjs` from the repo root to
   regenerate frontend/src/assets/studio-*.jpg. Query params: w, h, fov (vertical, deg),
-  spp (samples per pixel).
+  spp (samples per pixel), row (which row of tubes the name hangs from).
 -->
 <html>
   <head>
     <meta charset="utf-8" />
     <title>studio render</title>
+    <style>
+      /* Michroma (OFL) stands in for the Eurostile Extended of the Endless sleeve */
+      @font-face { font-family: 'Michroma'; src: url('Michroma-Regular.ttf'); }
+    </style>
   </head>
   <body style="margin: 0; background: #111">
     <canvas id="out"></canvas>
@@ -33,6 +37,16 @@
       uniform vec2 uRes;
       uniform int uFrame;
       uniform float uTanY;
+      // the name, hung letter by letter from a row of tubes; laid out in JS (see hangingLetters)
+      const int LETTER_N = 11;
+      uniform sampler2D uLetters; // signed distance to each letter's outline, in atlas pixels
+      uniform float uLetterScale; // metres per atlas pixel
+      uniform vec4 uLetterHang[LETTER_N]; // x, y, z where the wire meets the tube; wire length
+      uniform vec4 uLetterSize[LETTER_N]; // half-width, height (m); x of the card's centre and y of its top edge, from the tube point
+      uniform vec4 uLetterUV[LETTER_N]; // u0, v0, u1, v1 of the letter in the atlas
+      uniform mat3 uLetterRot[LETTER_N]; // letter frame → world: twist on the wire, then pendulum tilt
+      uniform vec4 uLetterLegs[LETTER_N]; // a bridle for a letter open at the top (the M): x, y of each leg's end; all 0 when the wire ties straight on
+      uniform vec3 uLetterMin, uLetterMax; // box around all the letters and their wires
       out vec4 outColor;
 
       const float PI = 3.14159265;
@@ -78,7 +92,7 @@
       // Everything about it is described in a local frame (board centred on x = 0 at floor
       // level, writing face towards the camera at -z) and turned into the room by a 10° yaw
       // about y, so it sits a little askew instead of squared up to the walls.
-      const vec3 BOARD_POS = vec3(0.1, 0.0, 15.0);
+      const vec3 BOARD_POS = vec3(0.1, 0.0, 12.0);
       const float BOARD_C = 0.98480775, BOARD_S = 0.17364818; // cos / sin of the yaw
       const float BOARD_HALF_W = 1.0; // writing surface 2 × 1 m
       const float BOARD_Y0 = 0.88;
@@ -109,7 +123,8 @@
 
       const int M_NONE = 0, M_FLOOR = 1, M_CEIL = 2, M_LEFT = 3, M_RIGHT = 4, M_BACK = 5,
         M_FRONT = 6, M_STUD = 7, M_BEAM = 8, M_TUBE = 9, M_PIPE = 10, M_PLATE = 11,
-        M_BOARD = 12, M_FRAME = 13, M_STAND = 14, M_WHEEL = 15, M_CHALK = 16, M_ERASER = 17;
+        M_BOARD = 12, M_FRAME = 13, M_STAND = 14, M_WHEEL = 15, M_CHALK = 16, M_ERASER = 17,
+        M_LETTER = 18, M_WIRE = 19;
 
       struct Hit { float t; vec3 n; int m; };
 
@@ -272,6 +287,67 @@
         if (l.t < h.t) { h.t = l.t; h.n = boardWorldDir(l.n); h.m = l.m; }
       }
 
+      // The name: letters cut from thick card, each hung by a wire from a tube. A letter is
+      // its glyph extruded LETTER_T deep — the atlas holds the signed distance to the
+      // outline, so the extrusion is sphere-traced inside the letter's box and the sides
+      // get normals from the field's gradient. Each letter's frame has its origin where the
+      // wire meets the tube and carries the letter's own rotation (a twist on the wire and
+      // a small pendulum tilt), so wire and letter swing together. The wire ties onto the
+      // first ink under the letter's balance point — the top of an o, the shoulder of an h,
+      // through the dot of the i to its stem — so the card sits offset from the wire
+      // (uLetterSize.zw); a letter open at the top there (the M) hangs from a bridle
+      // instead: two legs from the end of the wire to its peaks.
+      const float LETTER_T = 0.07;
+      const float WIRE_R = 0.008;
+
+      void letters(vec3 o, vec3 d, inout Hit h) {
+        float tn, tf; vec3 n;
+        if (!slab(o, d, uLetterMin, uLetterMax, tn, tf, n) || tn >= h.t) return;
+        vec2 texel = 1.0 / vec2(textureSize(uLetters, 0));
+        for (int i = 0; i < LETTER_N; i++) {
+          vec4 hang = uLetterHang[i];
+          vec4 size = uLetterSize[i];
+          vec4 r = uLetterUV[i];
+          mat3 rot = uLetterRot[i];
+          vec3 lo = (o - hang.xyz) * rot; // v * M is transpose(M) * v: world → letter frame
+          vec3 ld = d * rot;
+          Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+          vec4 legs = uLetterLegs[i];
+          vec3 tie = vec3(0.0, -hang.w, 0.0);
+          cylinder(lo, ld, tie - vec3(0.0, legs.y == 0.0 ? 0.02 : 0.0, 0.0), vec3(0.0), WIRE_R, M_WIRE, l); // the end sits inside the board
+          if (legs.y != 0.0) {
+            cylinder(lo, ld, tie, vec3(legs.xy, 0.0), WIRE_R, M_WIRE, l);
+            cylinder(lo, ld, tie, vec3(legs.zw, 0.0), WIRE_R, M_WIRE, l);
+          }
+          float hw = size.x, hh = size.y, cx = size.z, top = size.w;
+          if (slab(lo, ld, vec3(cx - hw, top - hh, -0.5 * LETTER_T), vec3(cx + hw, top, 0.5 * LETTER_T), tn, tf, n) && tn < l.t) {
+            float t = max(tn, 1e-4);
+            for (int k = 0; k < 48; k++) {
+              vec3 p = lo + ld * t;
+              vec2 uv = mix(r.xy, r.zw, vec2(0.5 + 0.5 * (p.x - cx) / hw, (top - p.y) / hh));
+              float dxy = textureLod(uLetters, uv, 0.0).r * uLetterScale;
+              float dz = abs(p.z) - 0.5 * LETTER_T;
+              float dist = max(dxy, dz);
+              if (dist < 3e-4) {
+                if (t < l.t) {
+                  if (dz >= dxy) l.n = vec3(0.0, 0.0, sign(p.z));
+                  else {
+                    float gx = textureLod(uLetters, uv + vec2(texel.x, 0.0), 0.0).r - textureLod(uLetters, uv - vec2(texel.x, 0.0), 0.0).r;
+                    float gy = textureLod(uLetters, uv + vec2(0.0, texel.y), 0.0).r - textureLod(uLetters, uv - vec2(0.0, texel.y), 0.0).r;
+                    l.n = normalize(vec3(gx, -gy, 0.0));
+                  }
+                  l.t = t; l.m = M_LETTER;
+                }
+                break;
+              }
+              t += max(dist, 2e-4);
+              if (t > tf) break;
+            }
+          }
+          if (l.t < h.t) { h.t = l.t; h.n = rot * l.n; h.m = l.m; }
+        }
+      }
+
       const float PIPE_Z0 = 9.3, PIPE_Z1 = 21.6, PIPE_Z2 = 33.1;
 
       Hit trace(vec3 o, vec3 d) {
@@ -291,6 +367,7 @@
         box(o, d, vec3(-HALF_W, 0.0, PIPE_Z2 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z2 + 0.045), M_PIPE, h);
         tubes(o, d, h);
         blackboard(o, d, h);
+        letters(o, d, h);
         return h;
       }
 
@@ -352,6 +429,8 @@
         }
         if (m == M_CHALK) return 0.9 + 0.06 * (noise(p.xz * 400.0) - 0.5);
         if (m == M_ERASER) return 0.42;
+        if (m == M_LETTER) return 0.86 + 0.03 * (noise(p.xy * 90.0) - 0.5);
+        if (m == M_WIRE) return 0.75;
         if (m == M_LEFT) {
           vec2 q = vec2(p.z, p.y);
           float a = 0.84;
@@ -637,11 +716,11 @@
           haze.restore()
         }
 
-        // chalk: the name, an underline that trails off, a couple of stray strokes
+        // chalk: two lines, an underline that trails off, a couple of stray strokes
         const chalk = layer()
-        const name = 'Malachi Topp'
+        const lines = ['A theoretical', 'physics student']
         chalk.font = `100px ${font}`
-        const size = Math.floor((100 * 0.8 * w) / chalk.measureText(name).width)
+        const size = Math.floor(Math.min(...lines.map((line) => (100 * 0.8 * w) / chalk.measureText(line).width)))
         chalk.font = `${size}px ${font}`
         chalk.textAlign = 'center'
         chalk.textBaseline = 'middle'
@@ -651,15 +730,17 @@
         chalk.strokeStyle = 'rgba(255,255,255,0.9)'
         chalk.filter = 'blur(0.8px)'
         chalk.save()
-        chalk.translate(0.49 * w, 0.45 * h)
+        chalk.translate(0.49 * w, 0.37 * h)
         chalk.rotate(-0.03)
         chalk.lineWidth = size * 0.035
-        chalk.strokeText(name, 0, 0)
-        chalk.fillText(name, 0, 0)
+        chalk.strokeText(lines[0], 0, 0)
+        chalk.fillText(lines[0], 0, 0)
+        chalk.strokeText(lines[1], 0.01 * w, size * 1.15)
+        chalk.fillText(lines[1], 0.01 * w, size * 1.15)
         chalk.lineWidth = size * 0.05
         chalk.beginPath()
-        chalk.moveTo(-0.35 * w, size * 0.56)
-        chalk.quadraticCurveTo(-0.05 * w, size * 0.74, 0.31 * w, size * 0.6)
+        chalk.moveTo(-0.35 * w, size * 1.71)
+        chalk.quadraticCurveTo(-0.05 * w, size * 1.89, 0.31 * w, size * 1.75)
         chalk.stroke()
         chalk.restore()
         chalk.lineWidth = 5
@@ -700,7 +781,255 @@
         return out.canvas
       }
 
+      // Felzenszwalb & Huttenlocher's exact Euclidean distance transform, in place on a grid
+      // of squared distances (0 on the shape, EDT_INF off it): one 1D pass per axis.
+      const EDT_INF = 1e20
+      function edt(grid, width, height) {
+        const n = Math.max(width, height)
+        const f = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1)
+        for (let x = 0; x < width; x++) edt1d(grid, x, width, height, f, v, z)
+        for (let y = 0; y < height; y++) edt1d(grid, y * width, 1, width, f, v, z)
+      }
+      function edt1d(grid, offset, stride, length, f, v, z) {
+        v[0] = 0
+        z[0] = -EDT_INF
+        z[1] = EDT_INF
+        f[0] = grid[offset]
+        for (let q = 1, k = 0, s = 0; q < length; q++) {
+          f[q] = grid[offset + q * stride]
+          const q2 = q * q
+          do {
+            const r = v[k]
+            s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2
+          } while (s <= z[k] && --k > -1)
+          k++
+          v[k] = q
+          z[k] = s
+          z[k + 1] = EDT_INF
+        }
+        for (let q = 0, k = 0; q < length; q++) {
+          while (z[k + 1] < q) k++
+          const r = v[k]
+          const qr = q - r
+          grid[offset + q * stride] = f[r] + qr * qr
+        }
+      }
+
+      // Reads a glyph's ink back out of the atlas to decide where its wire ties on. Hung from
+      // the column through its centre of mass a letter hangs level, and the wire meets the
+      // first ink down that column — the top of an o, the shoulder of an h (the i's dot is a
+      // separate piece, so the wire passes through it to the stem). A letter open at the top
+      // in the middle (the M) would put that tie deep in its notch, so it gets a bridle
+      // instead: two legs from the end of the wire to the highest ink either side of the
+      // column. Pixels are those of the glyph's rect in the atlas; rows count down from its top.
+      function inkAnalysis(ctx, x0, y0, w, h) {
+        const data = ctx.getImageData(x0, y0, w, h).data
+        const piece = new Int32Array(w * h) // which connected piece of ink each pixel belongs to
+        const sizes = [0]
+        let sumX = 0, count = 0
+        for (let i = 0; i < w * h; i++) {
+          if (data[i * 4] <= 127) continue
+          sumX += i % w
+          count++
+          if (piece[i]) continue
+          const id = sizes.push(0) - 1
+          const stack = [i]
+          piece[i] = id
+          while (stack.length) {
+            const j = stack.pop()
+            sizes[id]++
+            for (const n of [j - w, j + w, j % w > 0 ? j - 1 : -1, j % w < w - 1 ? j + 1 : -1]) {
+              if (n >= 0 && n < w * h && !piece[n] && data[n * 4] > 127) {
+                piece[n] = id
+                stack.push(n)
+              }
+            }
+          }
+        }
+        const main = sizes.indexOf(Math.max(...sizes))
+        const topOf = (x) => {
+          // first row of the main piece down column x
+          if (x >= 0 && x < w) for (let y = 0; y < h; y++) if (piece[y * w + x] === main) return y
+          return Infinity
+        }
+        let top = Infinity, bottom = 0
+        for (let i = 0; i < w * h; i++) if (piece[i] === main) { top = Math.min(top, Math.floor(i / w)); bottom = Math.floor(i / w) }
+        const centre = Math.round(sumX / count)
+        let col = centre
+        for (let s = 1; topOf(col) === Infinity && s < w; s++) col = topOf(centre + s) < Infinity ? centre + s : centre - s
+        let tieRow = topOf(col), legs = null
+        if (tieRow - top > 0.4 * (bottom - top)) {
+          const peak = (from, to, step) => {
+            // the highest ink between two columns, at its point nearest the tie column
+            let best = { x: from, y: Infinity }
+            for (let x = from; x !== to; x += step) {
+              const y = topOf(x)
+              if (y < best.y) best = { x, y }
+            }
+            return best
+          }
+          legs = [peak(col - 1, -1, -1), peak(col + 1, w, 1)]
+          tieRow = Math.min(legs[0].y, legs[1].y) - 0.42 * (legs[1].x - legs[0].x) // the ring, above the letter
+        }
+        return { col, tieRow, legs }
+      }
+
+      // The name hung from the tubes: one glyph per cell of an atlas that ends up holding
+      // the signed distance to each outline (the shader extrudes and ray-marches it), plus
+      // where and how each letter hangs (metres). Each word hangs from its own tube, the
+      // two either side of the middle of the hall, pushed together as far as the gap between
+      // the tubes allows. Every letter is tied on where its ink actually is (see inkAnalysis)
+      // and gets its own twist on the wire, a small pendulum tilt and a little slack, so they
+      // hang loosely rather than in a line; pose(t) then moves each of them a little for the
+      // frames of the looping video. Michroma only comes in one weight, so the outline is
+      // stroked to push it towards the sleeve's bold.
+      function hangingLetters() {
+        const fs = document.getElementById('fs').textContent
+        const glsl = (name) => Number(fs.match(new RegExp(`const (?:float|int) ${name} = (-?[\\d.]+)`))[1])
+        const TUBE_Y = glsl('TUBE_Y'), TUBE_HALF_LEN = glsl('TUBE_HALF_LEN'), COLS = glsl('COLS')
+        const COL0 = glsl('COL0'), COL_STEP = glsl('COL_STEP'), ROW0 = glsl('ROW0'), ROW_STEP = glsl('ROW_STEP')
+
+        const CAP_H = 0.45 // height of a capital
+        const WIRE = 0.4 // from the tube down to the tallest letters
+        // which row of tubes: the first inside the landscape frame; one further back for the
+        // portrait frame, which is too narrow for the name at that row
+        const ROW = ROW0 + Number(params.get('row') ?? 2) * ROW_STEP
+        const inset = (COL_STEP - 2 * TUBE_HALF_LEN) / 2 + 0.08 // a wire this far from the hall's centre line is on a tube
+        // per letter: twist about the wire, pendulum tilt back/forth and side to side (degrees), extra wire (m)
+        const twist = [12, -8, 15, -11, 6, -14, 9, 13, -10, 4, -7]
+        const swing = [3, -2.5, 4, -3.5, 1.5, -4, 2.5, 3.5, -3, 1, -2]
+        const lean = [2, -1.5, 2.5, -2, 1, -2.5, 1.5, 2, -1.5, 0.5, -1]
+        const slack = [0.02, -0.03, 0.04, -0.01, 0.03, -0.04, 0.01, -0.02, 0.03, -0.03, 0.02]
+        // ...and how each one moves in the looping video: a slow turn on the wire (one cycle
+        // per loop) and the pendulum swing of the wire itself (three, i.e. a 2 s period, about
+        // right for wires this long), each letter with its own phases and vigour so they are
+        // never in step. Whole cycles per LOOP make the loop seamless.
+        const LOOP = 6 // seconds
+        const phase = [[0.3, 1.1, 2.4], [2.1, 4.0, 0.2], [4.4, 2.5, 3.9], [1.2, 5.8, 1.0], [5.5, 0.4, 5.3], [3.3, 3.6, 2.0], [0.9, 1.9, 4.7], [2.8, 5.1, 0.6], [4.9, 2.2, 3.4], [1.7, 0.8, 5.9], [3.9, 4.5, 1.5]] // twist, swing, lean (rad)
+        const vigour = [1, 0.8, 1.2, 0.9, 1.1, 0.7, 1.3, 0.9, 1, 1.2, 0.8]
+
+        const px = 300, tracking = 0.06 * px, cell = 512, cols = 4
+        const words = 'Malachi Topp'.split(' ')
+        const count = words.join('').length
+        if (count !== glsl('LETTER_N')) throw new Error(`LETTER_N in the shader must be ${count}`)
+        const atlas = document.createElement('canvas')
+        atlas.width = cell * cols
+        atlas.height = cell * Math.ceil(count / cols)
+        const ctx = atlas.getContext('2d')
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, atlas.width, atlas.height)
+        ctx.font = `${px}px Michroma`
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'alphabetic'
+        ctx.fillStyle = ctx.strokeStyle = '#fff'
+        ctx.lineJoin = 'round'
+        ctx.lineWidth = px * 0.05
+        const pad = ctx.lineWidth / 2 + 1 // the stroke sits outside the measured ink
+        const scale = CAP_H / ctx.measureText('M').actualBoundingBoxAscent
+
+        // draw each glyph into its cell — its rect there is the measured ink plus the pad all
+        // round — and read back where its wire should tie on
+        let k = 0
+        const glyphs = words.map((word) => {
+          let pen = 0
+          return [...word].map((ch) => {
+            const m = ctx.measureText(ch)
+            const halfW = (m.actualBoundingBoxRight + m.actualBoundingBoxLeft) / 2 + pad
+            const ascent = m.actualBoundingBoxAscent + pad, descent = m.actualBoundingBoxDescent + pad
+            const w = Math.ceil(2 * halfW) + 1, h = Math.ceil(ascent + descent) + 1
+            const boxL = Math.round((k % cols) * cell + cell / 2 - halfW)
+            const boxT = Math.round(Math.floor(k / cols) * cell + cell / 2 - (ascent + descent) / 2)
+            ctx.strokeText(ch, boxL + pad + m.actualBoundingBoxLeft, boxT + ascent)
+            ctx.fillText(ch, boxL + pad + m.actualBoundingBoxLeft, boxT + ascent)
+            const ink = inkAnalysis(ctx, boxL, boxT, w, h)
+            // the tie column in the word's own coordinates: the glyph's origin sits pad + left in from its rect
+            const glyph = { ch, k: k++, boxL, boxT, w, h, ascent, ...ink, tiePx: pen + ink.col - pad - m.actualBoundingBoxLeft }
+            pen += m.width + tracking
+            return glyph
+          })
+        })
+        const [first, second] = glyphs
+        const starts = [-inset - first[first.length - 1].tiePx * scale, inset - second[0].tiePx * scale]
+        const baseline = TUBE_Y - WIRE - CAP_H
+
+        const rad = (deg) => (deg * Math.PI) / 180
+        const rotX = (a) => [[1, 0, 0], [0, Math.cos(a), -Math.sin(a)], [0, Math.sin(a), Math.cos(a)]]
+        const rotY = (a) => [[Math.cos(a), 0, Math.sin(a)], [0, 1, 0], [-Math.sin(a), 0, Math.cos(a)]]
+        const rotZ = (a) => [[Math.cos(a), -Math.sin(a), 0], [Math.sin(a), Math.cos(a), 0], [0, 0, 1]]
+        const mul = (A, B) => A.map((row) => B[0].map((_, j) => row.reduce((sum, a, k) => sum + a * B[k][j], 0)))
+        const columnMajor = (M) => [0, 1, 2].flatMap((j) => [M[0][j], M[1][j], M[2][j]])
+
+        // The pose at time t (seconds into the loop; 0 is the still): where each letter hangs
+        // and how it is turned. Each angle wobbles about its resting value by a sine that
+        // starts at zero, so frame 0 of the video is exactly the still.
+        const pose = (t = 0) => {
+          const wobble = (rest, amp, cycles, ph) => rest + amp * (Math.sin((2 * Math.PI * cycles * t) / LOOP + ph) - Math.sin(ph))
+          const hang = [], size = [], uv = [], rot = [], legs = [], layout = []
+          const min = [Infinity, Infinity, ROW - 0.35], max = [-Infinity, TUBE_Y + 0.01, ROW + 0.35]
+          glyphs.forEach((word, w) => {
+            for (const g of word) {
+              const x = starts[w] + g.tiePx * scale
+              if (![...Array(COLS).keys()].some((c) => Math.abs(x - (COL0 + c * COL_STEP)) <= TUBE_HALF_LEN))
+                throw new Error(`"${g.ch}" would hang at x = ${x.toFixed(2)}, between tubes`)
+              // the wire runs from the tube down to the glyph's tie row (the rect's row 0 is at
+              // baseline + ascent); the card is then placed around that point
+              const wire = TUBE_Y - (baseline + (g.ascent - g.tieRow) * scale) + slack[g.k]
+              const hw = (g.w / 2) * scale, hh = g.h * scale
+              const cx = (g.w / 2 - g.col) * scale, top = g.tieRow * scale - wire
+              hang.push(x, TUBE_Y, ROW, wire)
+              size.push(hw, hh, cx, top)
+              uv.push(g.boxL / atlas.width, g.boxT / atlas.height, (g.boxL + g.w) / atlas.width, (g.boxT + g.h) / atlas.height)
+              const bury = 0.015 / scale // px: the legs' ends sit inside the board
+              legs.push(...(g.legs ? g.legs.flatMap((leg) => [(leg.x - g.col) * scale, top - (leg.y + bury) * scale]) : [0, 0, 0, 0]))
+              // twist about the wire first, then the pendulum tilt of wire and letter together
+              const [ph1, ph2, ph3] = phase[g.k], v = vigour[g.k]
+              const turn = wobble(twist[g.k], 5 * v, 1, ph1), pitch = wobble(swing[g.k], 2 * v, 3, ph2), roll = wobble(lean[g.k], 1.2 * v, 3, ph3)
+              rot.push(...columnMajor(mul(mul(rotX(rad(pitch)), rotZ(rad(roll))), rotY(rad(turn)))))
+              // the box is padded to hold the letter wherever the loop takes it
+              min[0] = Math.min(min[0], x + cx - hw - 0.25)
+              max[0] = Math.max(max[0], x + cx + hw + 0.25)
+              min[1] = Math.min(min[1], TUBE_Y + top - hh - 0.15)
+              layout.push({ ch: g.ch, x: +x.toFixed(3), wire: +wire.toFixed(3), tie: g.legs ? 'bridle' : `row ${g.tieRow} of ${g.h}`, angles: [turn, pitch, roll].map((a) => +a.toFixed(1)) })
+            }
+          })
+          return { hang, size, uv, rot, legs, min, max, layout }
+        }
+
+        // signed distance to the outlines (atlas px, positive outside), from the
+        // anti-aliased mask: an exact distance transform of the outside and of the inside
+        const aw = atlas.width, ah = atlas.height
+        const mask = ctx.getImageData(0, 0, aw, ah).data
+        const outer = new Float64Array(aw * ah), inner = new Float64Array(aw * ah)
+        for (let i = 0; i < aw * ah; i++) {
+          const a = mask[i * 4] / 255
+          outer[i] = a === 1 ? 0 : a === 0 ? EDT_INF : Math.max(0, 0.5 - a) ** 2
+          inner[i] = a === 1 ? EDT_INF : a === 0 ? 0 : Math.max(0, a - 0.5) ** 2
+        }
+        edt(outer, aw, ah)
+        edt(inner, aw, ah)
+        const sdf = new Float32Array(aw * ah)
+        for (let i = 0; i < aw * ah; i++) sdf[i] = Math.sqrt(outer[i]) - Math.sqrt(inner[i])
+        return { sdf, width: aw, height: ah, scale, loop: LOOP, pose }
+      }
+
       async function render() {
+        if ((await document.fonts.load('300px Michroma')).length === 0) throw new Error('Michroma did not load')
+        if (params.has('letters')) {
+          // debug: the letters' distance field, mid-grey along the outlines
+          const { sdf, width, height, pose } = hangingLetters()
+          const c = document.createElement('canvas')
+          c.width = width
+          c.height = height
+          const cx = c.getContext('2d')
+          const img = cx.createImageData(width, height)
+          for (let i = 0; i < sdf.length; i++) {
+            const byte = Math.round(Math.min(Math.max(0.5 - sdf[i] / 64, 0), 1) * 255)
+            img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = byte
+            img.data[i * 4 + 3] = 255
+          }
+          cx.putImageData(img, 0, 0)
+          return { gpu: 'none', stats: pose(0).layout, renderMs: 0, jpeg: c.toDataURL('image/jpeg', 0.92) }
+        }
         if (params.has('board')) {
           // debug: just show the chalk texture
           return { gpu: 'none', stats: {}, renderMs: 0, jpeg: boardTexture().toDataURL('image/jpeg', 0.92) }
@@ -748,6 +1077,32 @@
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
         gl.uniform1i(gl.getUniformLocation(program, 'uBoard'), 1)
+
+        const letters = hangingLetters()
+        const lettersTex = gl.createTexture()
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, lettersTex)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, letters.width, letters.height, 0, gl.RED, gl.FLOAT, letters.sdf)
+        // a float field only filters smoothly with the extension; nearest still works, just steppier sides
+        const sdfFilter = gl.getExtension('OES_texture_float_linear') ? gl.LINEAR : gl.NEAREST
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, sdfFilter)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, sdfFilter)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+        gl.uniform1i(gl.getUniformLocation(program, 'uLetters'), 2)
+        gl.uniform1f(gl.getUniformLocation(program, 'uLetterScale'), letters.scale)
+        const poseLetters = (t) => {
+          const p = letters.pose(t)
+          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterHang'), p.hang)
+          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterSize'), p.size)
+          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterUV'), p.uv)
+          gl.uniformMatrix3fv(gl.getUniformLocation(program, 'uLetterRot'), false, p.rot)
+          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterLegs'), p.legs)
+          gl.uniform3fv(gl.getUniformLocation(program, 'uLetterMin'), p.min)
+          gl.uniform3fv(gl.getUniformLocation(program, 'uLetterMax'), p.max)
+          return p
+        }
+        const still = poseLetters(0)
         gl.activeTexture(gl.TEXTURE0)
 
         const errors = {}
@@ -766,37 +1121,45 @@
         const uFrame = gl.getUniformLocation(program, 'uFrame')
 
         // Draw in horizontal bands so no single GPU command runs long enough to trip the
-        // Windows driver watchdog.
-        const BANDS = Math.max(1, Math.ceil((W * H) / 400000))
-        const started = performance.now()
+        // Windows driver watchdog. Accumulates SPP light paths per pixel over a rectangle of
+        // the frame (GL coordinates, y up) and returns the target holding the sums; the rest
+        // of both targets is left alone, which is what lets renderFrame redo just a patch.
         let current = 0
-        gl.enable(gl.SCISSOR_TEST)
-        for (let frame = 0; frame < SPP; frame++) {
-          const src = targets[current]
-          const dst = targets[1 - current]
-          gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb)
-          gl.activeTexture(gl.TEXTURE0)
-          gl.bindTexture(gl.TEXTURE_2D, src.tex)
-          gl.uniform1i(uFrame, frame)
-          for (let b = 0; b < BANDS; b++) {
-            const y0 = Math.floor((b * H) / BANDS)
-            const y1 = Math.floor(((b + 1) * H) / BANDS)
-            gl.scissor(0, y0, W, y1 - y0)
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-            gl.finish()
-            if (frame === 0 && b === 0) errors.afterFirstDraw = gl.getError()
+        const accumulate = async (x0, y0, w, h) => {
+          const bands = Math.max(1, Math.ceil((w * h) / 400000))
+          gl.enable(gl.SCISSOR_TEST)
+          gl.scissor(x0, y0, w, h)
+          for (const target of targets) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
+            gl.clear(gl.COLOR_BUFFER_BIT)
           }
-          current = 1 - current
-          if (frame % 8 === 0) await new Promise((r) => setTimeout(r, 0))
+          for (let frame = 0; frame < SPP; frame++) {
+            const src = targets[current]
+            const dst = targets[1 - current]
+            gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb)
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, src.tex)
+            gl.uniform1i(uFrame, frame)
+            for (let b = 0; b < bands; b++) {
+              const b0 = y0 + Math.floor((b * h) / bands)
+              const b1 = y0 + Math.floor(((b + 1) * h) / bands)
+              gl.scissor(x0, b0, w, b1 - b0)
+              gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+              gl.finish()
+              if (errors.afterFirstDraw === undefined) errors.afterFirstDraw = gl.getError()
+            }
+            current = 1 - current
+            if (frame % 8 === 0) await new Promise((r) => setTimeout(r, 0))
+          }
+          gl.disable(gl.SCISSOR_TEST)
+          return targets[current]
         }
-        gl.disable(gl.SCISSOR_TEST)
-
+        const started = performance.now()
         const raw = new Float32Array(W * H * 4)
-        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[current].fb)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, (await accumulate(0, 0, W, H)).fb)
         errors.beforeRead = gl.getError()
         gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, raw)
         errors.afterRead = gl.getError()
-        const glError = errors
         const renderMs = performance.now() - started
         let rawSum = 0
         let rawMax = 0
@@ -804,73 +1167,124 @@
           rawSum += raw[i]
           if (raw[i] > rawMax) rawMax = raw[i]
         }
-        const stats = { glError, rawMean: rawSum / (W * H), rawMax }
+        const stats = { glError: errors, rawMean: rawSum / (W * H), rawMax }
 
         // ---- film look ----
         // flip to top-down rows and average the samples
-        const lum = new Float32Array(W * H)
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) lum[(H - 1 - y) * W + x] = raw[(y * W + x) * 4] / SPP
+        const luminance = (samples) => {
+          const lum = new Float32Array(W * H)
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) lum[(H - 1 - y) * W + x] = samples[(y * W + x) * 4] / SPP
+          }
+          return lum
         }
 
         // expose so the walls and floor sit in the mid-tones, whatever the light levels
-        const sorted = lum.filter((_, i) => i % 7 === 0).sort()
-        const median = sorted[Math.floor(sorted.length * 0.5)]
-        const exposure = median > 0 ? 0.34 / median : 1
-        stats.median = median
+        const exposureFor = (lum) => {
+          const sorted = lum.filter((_, i) => i % 7 === 0).sort()
+          const median = sorted[Math.floor(sorted.length * 0.5)]
+          stats.median = median
+          return median > 0 ? 0.34 / median : 1
+        }
 
-        for (let i = 0; i < lum.length; i++) lum[i] *= exposure
+        // Everything after exposure — firefly clamp, bloom, tone curve, vignette, grain — the
+        // same for the still and for every video frame (the grain's seed included, so the
+        // grain sits still instead of crawling, which also keeps the video small).
+        const filmLook = (lum, exposure) => {
+          for (let i = 0; i < lum.length; i++) lum[i] *= exposure
 
-        // Fireflies: a lone pixel far brighter than everything around it is noise, not
-        // detail (real highlights like the tubes are big blobs), so pull it down.
-        const filtered = new Float32Array(lum)
-        for (let y = 1; y < H - 1; y++) {
-          for (let x = 1; x < W - 1; x++) {
-            const i = y * W + x
-            let around = 0
-            for (let dy = -1; dy <= 1; dy++) {
-              for (let dx = -1; dx <= 1; dx++) {
-                if (dx || dy) around = Math.max(around, lum[i + dy * W + dx])
+          // Fireflies: a lone pixel far brighter than everything around it is noise, not
+          // detail (real highlights like the tubes are big blobs), so pull it down.
+          const filtered = new Float32Array(lum)
+          for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) {
+              const i = y * W + x
+              let around = 0
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx || dy) around = Math.max(around, lum[i + dy * W + dx])
+                }
               }
+              if (lum[i] > 2 * around + 0.05) filtered[i] = around
             }
-            if (lum[i] > 2 * around + 0.05) filtered[i] = around
+          }
+          lum.set(filtered)
+
+          const bright = new Float32Array(W * H)
+          for (let i = 0; i < lum.length; i++) bright[i] = Math.min(Math.max(lum[i] - 1.2, 0), 12)
+          const scale = W / 2400
+          const bloomNear = blur(bright, W, H, Math.max(1, Math.round(5 * scale)))
+          const bloomFar = blur(bright, W, H, Math.max(2, Math.round(32 * scale)))
+
+          const out = document.createElement('canvas')
+          out.width = W
+          out.height = H
+          const ctx = out.getContext('2d')
+          const image = ctx.createImageData(W, H)
+          let seed = 12345
+          const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x
+              let v = lum[i] + 0.35 * bloomNear[i] + 0.12 * bloomFar[i]
+              v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14) // ACES-style tone curve
+              v = Math.min(Math.max(v, 0), 1)
+              v = v + 0.45 * (v * v * (3 - 2 * v) - v) // more contrast: inky ceiling, chalky walls
+              v = Math.pow(v, 1 / 2.2)
+              const dx = (x / W) * 2 - 1
+              const dy = (y / H) * 2 - 1
+              v *= 1 - 0.3 * Math.min(1, (dx * dx + dy * dy) / 2) // vignette
+              v += (random() + random() - 1) * 0.03 // grain
+              const byte = Math.round(Math.min(Math.max(v, 0), 1) * 255)
+              const p = i * 4
+              image.data[p] = image.data[p + 1] = image.data[p + 2] = byte
+              image.data[p + 3] = 255
+            }
+          }
+          ctx.putImageData(image, 0, 0)
+          return out
+        }
+
+        const lum = luminance(raw)
+        const exposure = exposureFor(lum)
+        stats.exposure = exposure
+        const out = filmLook(lum, exposure)
+
+        // The looping video: renderFrame(i, n) re-renders just the patch of the frame the
+        // letters can reach, at time i/n of the loop, drops it into the still's samples and
+        // runs the same film look — so everything outside the patch is pixel-identical to
+        // the still (same seeds, same post) and the patch's edges never show. The patch is
+        // the letters' padded box (which already allows for all their movement) projected
+        // into GL pixel coordinates, plus a margin.
+        const cam = document.getElementById('fs').textContent.match(/const vec3 CAM = vec3\(([^,]+),([^,]+),([^)]+)\)/).slice(1).map(Number)
+        const tanY = Math.tan((FOV * Math.PI) / 360)
+        const reach = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
+        for (const x of [still.min[0], still.max[0]]) {
+          for (const y of [still.min[1], still.max[1]]) {
+            for (const z of [still.min[2], still.max[2]]) {
+              const sx = (((x - cam[0]) / (z - cam[2]) / (tanY * (W / H))) * 0.5 + 0.5) * W
+              const sy = (((y - cam[1]) / (z - cam[2]) / tanY) * 0.5 + 0.5) * H
+              reach.x0 = Math.min(reach.x0, sx)
+              reach.x1 = Math.max(reach.x1, sx)
+              reach.y0 = Math.min(reach.y0, sy)
+              reach.y1 = Math.max(reach.y1, sy)
+            }
           }
         }
-        lum.set(filtered)
-
-        const bright = new Float32Array(W * H)
-        for (let i = 0; i < lum.length; i++) bright[i] = Math.min(Math.max(lum[i] - 1.2, 0), 12)
-        const scale = W / 2400
-        const bloomNear = blur(bright, W, H, Math.max(1, Math.round(5 * scale)))
-        const bloomFar = blur(bright, W, H, Math.max(2, Math.round(32 * scale)))
-
-        const out = document.createElement('canvas')
-        out.width = W
-        out.height = H
-        const ctx = out.getContext('2d')
-        const image = ctx.createImageData(W, H)
-        let seed = 12345
-        const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) {
-            const i = y * W + x
-            let v = lum[i] + 0.35 * bloomNear[i] + 0.12 * bloomFar[i]
-            v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14) // ACES-style tone curve
-            v = Math.min(Math.max(v, 0), 1)
-            v = v + 0.45 * (v * v * (3 - 2 * v) - v) // more contrast: inky ceiling, chalky walls
-            v = Math.pow(v, 1 / 2.2)
-            const dx = (x / W) * 2 - 1
-            const dy = (y / H) * 2 - 1
-            v *= 1 - 0.3 * Math.min(1, (dx * dx + dy * dy) / 2) // vignette
-            v += (random() + random() - 1) * 0.03 // grain
-            const byte = Math.round(Math.min(Math.max(v, 0), 1) * 255)
-            const p = i * 4
-            image.data[p] = image.data[p + 1] = image.data[p + 2] = byte
-            image.data[p + 3] = 255
-          }
+        const margin = Math.max(8, Math.round((40 * W) / 2400))
+        const crop = { x: Math.max(0, Math.floor(reach.x0) - margin), y: Math.max(0, Math.floor(reach.y0) - margin) }
+        crop.w = Math.min(W, Math.ceil(reach.x1) + margin) - crop.x
+        crop.h = Math.min(H, Math.ceil(reach.y1) + margin) - crop.y
+        window.renderFrame = async (i, frames) => {
+          poseLetters((letters.loop * i) / frames)
+          const target = await accumulate(crop.x, crop.y, crop.w, crop.h)
+          const sums = new Float32Array(crop.w * crop.h * 4)
+          gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
+          gl.readPixels(crop.x, crop.y, crop.w, crop.h, gl.RGBA, gl.FLOAT, sums)
+          for (let r = 0; r < crop.h; r++) raw.set(sums.subarray(r * crop.w * 4, (r + 1) * crop.w * 4), ((crop.y + r) * W + crop.x) * 4)
+          return filmLook(luminance(raw), exposure).toDataURL('image/png')
         }
-        ctx.putImageData(image, 0, 0)
-        return { gpu, stats, renderMs: Math.round(renderMs), jpeg: out.toDataURL('image/jpeg', 0.84) }
+        return { gpu, stats, renderMs: Math.round(renderMs), loopSeconds: letters.loop, crop, jpeg: out.toDataURL('image/jpeg', 0.84) }
       }
 
       window.renderResult = render().catch((error) => ({ error: String(error && error.message ? error.message : error) }))

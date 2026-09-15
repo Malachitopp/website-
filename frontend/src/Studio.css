@@ -13,6 +13,11 @@
   object-fit: cover;
 }
 
+/* the video loop sits exactly over the still; it is decoration, not something to click */
+.studio-loop {
+  pointer-events: none;
+}
+
 .studio-back {
   position: fixed;
   top: 16px;

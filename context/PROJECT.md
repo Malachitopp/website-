@@ -66,8 +66,10 @@ name + Spotify content that used to be the whole site now lives on its own page.
     somewhere or its `router.get(...)` never runs.
   - The old `GET /` "Hello World" placeholder route has been removed.
 - **Studio image renderer** (`tools/studio-render/`, not part of the site build):
-  the studio page's background is a *rendered photo*, not hand-drawn SVG. See the
-  Frontend section for details.
+  the studio page's background is a *rendered photo* plus a 6 s video loop of the
+  same frame in which the hanging name sways — not hand-drawn SVG or CSS. The
+  loops are encoded with the `ffmpeg-static` root devDependency. See the Frontend
+  section for details.
 
 ## Config bugs already hit and fixed (don't reintroduce)
 - Root `package.json` had a duplicate `"scripts"` key — merged into one.
@@ -114,7 +116,35 @@ name + Spotify content that used to be the whole site now lives on its own page.
 - **Chrome D3D11 can't compile the studio path-tracer shader** ("Error compiling
   dynamic pixel executable", `GL_INVALID_OPERATION` on every draw, output all
   black). The renderer launches Chrome with `--use-angle=vulkan`, which works on
-  the Intel Iris Xe here; `swiftshader` also works but is ~20× slower.
+  both machines used so far (Intel Iris Xe laptop, AMD RX 6950 XT desktop);
+  `swiftshader` also works but is ~20× slower.
+- **The committed studio JPEGs can drift from the shader.** The "touches" commit
+  had `BOARD_POS` z = 15 in `index.html` while its JPEGs showed the board at
+  ~6 m (rendered from an uncommitted state), so the door was hidden even though
+  the code said otherwise. The JPEGs are build outputs of the shader: re-render
+  after every scene change and commit both together.
+- **`@font-face` from a `file://` page is blocked by Chrome** (each file is its
+  own origin, fonts need CORS). `render.mjs` passes
+  `--allow-file-access-from-files` so `index.html` can load
+  `Michroma-Regular.ttf` from beside it; without the flag the letters silently
+  fall back to a default font (the page now throws if the font didn't load).
+- **`sed -i` in Git Bash rewrites this repo's CRLF files as LF** (the working
+  tree is CRLF via `core.autocrlf=true`). Git normalises either way, so nothing
+  breaks, but keep files consistent: convert back with a Node one-liner or edit
+  with a script that preserves `\r\n`.
+- **`Studio.tsx` imports the MP4 loops** the same way as the JPEGs, so the "a
+  missing asset import blanks the whole dev app" rule applies to them too: if the
+  loops are deleted or regenerated, keep files at those paths (the `--preview`
+  MP4s work as stand-ins) until the real ones are written.
+- **npm 11 warns that `ffmpeg-static`'s install script is "not yet covered by
+  allowScripts"** on `npm install`. On 2026-09-15 the script still ran and
+  `node_modules/ffmpeg-static/ffmpeg.exe` was downloaded. If a fresh install ever
+  leaves that file missing, run `npm install-scripts approve ffmpeg-static` and
+  reinstall, or point the `FFMPEG` env var at any ffmpeg binary.
+- **`.env` keys written with a space before `=`** (`CLIENT_ID =…`) still load:
+  Node's `--env-file` trims keys. But `grep '^CLIENT_ID='` misses them, which led
+  an earlier session to wrongly record that those vars were missing from the
+  desktop's `.env`. Grep with `'^KEY *='`.
 
 ## Schema philosophy (important, keep revisiting this)
 - **No `users` table** — single-user site. Auth for write actions (uploading art,
@@ -226,6 +256,33 @@ name + Spotify content that used to be the whole site now lives on its own page.
   0; object-fit: cover`. Tall phones get a separately framed portrait render
   rather than a crop of the wide one. A "← back" pill button (top-left, uses
   `navigate('/')`).
+- **The name moves (added 2026-09-15, after the user asked "how come you didn't
+  make them move a little bit?"):** over the still sits a `<video
+  class="studio-photo studio-loop">` (same `inset: 0; object-fit: cover`,
+  `pointer-events: none`, `autoPlay muted loop playsInline`, `aria-hidden`)
+  playing `studio-landscape.mp4` / `studio-portrait.mp4`: a 6 s seamless loop of
+  the *same frame* in which only the letters sway. Frame 0 of the loop is the
+  still, so the hand-over from JPEG to video is invisible, and if the video never
+  loads the still simply stays. Orientation is picked in JS with a tiny
+  `useMediaQuery()` (`useSyncExternalStore` on `matchMedia`, same style as the
+  router) and the element gets a `key` per framing so a rotated phone loads the
+  other file cleanly; `prefers-reduced-motion: reduce` renders no video at all.
+  The video is a whole frame rather than a small patch positioned over the letters
+  because a patch would need sub-pixel alignment with the JPEG under `object-fit:
+  cover`, and browsers scale and colour-convert `<video>` and `<img>` differently,
+  so any seam would show. Cost: 1.45 MB (landscape) / 1.09 MB (portrait) per
+  loop; the JPEG still paints first regardless. Verified in headless Chrome
+  against the production build: both framings autoplay, loop and report no media
+  error.
+- **What's in the scene (as of 2026-09-15):** a school blackboard on casters
+  parked mid-hall reading "A theoretical / physics student" in chalk, the glow of
+  the far loading door showing over its top, and the name "Malachi Topp" hanging
+  letter by letter on cords from a row of the fluorescent tubes near the top of
+  the frame, in an *Endless*-style extended sans, swaying gently in the video
+  loop. Both are **rendered into the photo** (lit by the tubes, reflected in the
+  floor), not HTML overlaid on it — see the renderer section for how. The name
+  used to be on the board; the user moved it to the ceiling and gave the board
+  the tagline.
 - **Nothing in it is clickable yet, on purpose.** The user wants it mostly blank
   and will decide what goes in it. Future hotspots (Spotify, art, …) go here.
 - **History (don't re-propose):** the first version was a hand-drawn colour SVG
@@ -239,21 +296,132 @@ name + Spotify content that used to be the whole site now lives on its own page.
 - `index.html` is a self-contained **WebGL2 path tracer** (one big fragment
   shader, progressive accumulation into ping-pong RGBA32F textures, one sample per
   pixel per frame). `render.mjs` drives it in headless Chrome over the DevTools
-  protocol and writes JPEGs. Run from the repo root:
+  protocol and writes the JPEG stills **and the MP4 loops** the studio page uses.
+  Run from the repo root:
   - `node tools/studio-render/render.mjs` → `frontend/src/assets/studio-landscape.jpg`
-    (2400×1500, vertical FOV 58°, 1024 spp) and `studio-portrait.jpg` (1170×2340,
-    FOV 80°, 1024 spp). Roughly 10 minutes total on the Iris Xe.
-  - `--preview` → small/fast `preview-*.jpg` next to the script (gitignored);
-    `--stats` prints GL error / exposure diagnostics; env `CHROME` overrides the
+    (2400×1500, vertical FOV 58°, 1024 spp, `row=2`) and `studio-portrait.jpg`
+    (1170×2340, FOV 80°, 1024 spp, `row=3`), each followed by its 144-frame
+    `studio-*.mp4` loop. **Stills ~10 s each on the AMD RX 6950 XT desktop, each
+    loop ~4–5 minutes there** (the Iris Xe laptop would take hours for the loops:
+    use `--stills` on it). `--stills` skips the videos; `--frames N` changes the
+    frame count (the loop is always 6 s, so N sets the fps).
+  - `--preview` (64 spp, small) takes a few seconds and writes `preview-*.jpg`
+    next to the script (gitignored); add `--frames 24` for rough `preview-*.mp4`
+    loops too (also gitignored). The loop is: edit → preview → look at both JPEGs
+    (and a few video frames, e.g. with ffmpeg's `select`/`tile` filters) → full
+    render. For A/B comparisons, copy `index.html` + `render.mjs` into scratch
+    folders with different constants and run each copy's `render.mjs` (it renders
+    whatever `index.html` sits beside it, previews into its own folder).
+  - **How the loops are made:** after the still, the page keeps its GL state and
+    `render.mjs` calls `window.renderFrame(i, n)` for each frame. That re-poses
+    the letters at time `i/n` of the loop (`pose(t)` in `hangingLetters`),
+    re-renders **only the patch of the frame the letters can reach** (their padded
+    world box projected to pixels plus a 40 px margin, at the same 1024 spp with
+    the same per-pixel seeds), drops those samples into the still's sample buffer
+    and runs the identical film look over the whole frame, so everything outside
+    the patch is pixel-identical to the still and the patch's edges never show.
+    Frames go to a temp dir as PNGs and are encoded by **ffmpeg-static** (root
+    devDependency; the `FFMPEG` env var overrides it) as H.264 High / yuv420p
+    limited-range BT.709, CRF 20, preset slow, one keyframe per loop (`-g N`),
+    `+faststart`, no audio. The grain seed is fixed, so the grain is identical in
+    every frame: that is what keeps the files small (only the letters change
+    between frames). Sizes on 2026-09-15: landscape 1.45 MB, portrait 1.09 MB
+    (about 1.9 / 1.4 Mb/s).
+  - `--stats` prints GL error / exposure diagnostics; env `CHROME` overrides the
     browser path, `ANGLE` the backend (default `vulkan`; see config bugs).
+  - Page query params (`render.mjs` sets them): `w`, `h`, `fov`, `spp`, `row`
+    (which row of tubes the name hangs from). Debug: `?board` returns just the
+    chalk texture, `?letters` just the letters' distance field (with `--stats`,
+    where each letter ties on and its resting angles).
 - **The scene** (metres, camera at eye level 1.6m looking down the hall): 16m wide,
   55m long, 6.4m high box. 16 rows × 4 columns of fluorescent tubes hanging 0.8m
   below a near-black ceiling with deep cross beams; bare stud framing (studs every
   1.22m, plates + two rows of blocking) on the right wall; a stained white wall
   with three painted-over doorways and conduit pipes on the left; a glowing
-  roller door at the far end; sealed-concrete floor with slab joints, stains and a
-  narrow glossy reflection (Phong lobe, `GLOSS_N = 300`). Only the tubes and the
-  door emit light.
+  roller door at the far end (`DOOR_H` 4 m, half-width 2.8 m, at z = 52);
+  sealed-concrete floor with slab joints, stains and a narrow glossy reflection
+  (Phong lobe, `GLOSS_N = 300`). Only the tubes and the door emit light.
+- **The blackboard** (`BOARD_POS = (0.1, 0, 12)`, yawed 10° so it sits askew):
+  2×1 m slate in an aluminium rail on a wheeled stand, chalk tray with stubs and
+  an eraser, broken chalk and trodden chalk dust on the floor in front. All
+  modelled in a board-local frame (`boardLocal` / `boardWorldDir`) so the parts
+  are axis-aligned boxes and cylinders behind one bounding slab. The writing is a
+  2D-canvas texture (`boardTexture()`: Windows handwriting fonts "Ink Free" /
+  "Segoe Print" / …, two lines `'A theoretical'` / `'physics student'` sized to
+  80% of the board, underline that trails off, stray strokes, wipe haze, roughed
+  up with value noise) sampled by the shader as `uBoard` (red = chalk). **Board
+  distance was moved 15 → 12 m on 2026-09-15** so the door glow pokes over its
+  top: the door top is only 2.4 m above eye level at 52 m away, so the visible
+  strip grows slowly as the board recedes — 10 m gave a sliver, 15 m shrank the
+  board too much; 12 m chosen after previewing all three. If a bigger board *and*
+  more door light are ever wanted, the lever is a taller door (`DOOR_H`), not
+  board distance.
+- **The hanging name** (`hangingLetters()` in JS, `letters()` in the shader):
+  eleven letters cut from 7 cm card (`LETTER_T`, material `M_LETTER`, albedo
+  0.86), each on an 8 mm white cord (`M_WIRE`, albedo 0.75) up to a tube's
+  underside. **History:** the first version was flat zero-thickness cards tied at
+  the top-centre of each glyph's bounding box, so the user said it "looks very
+  flat" and that the "M" and "h" cords didn't reach the letters. A parallel
+  Claude session added the extrusion and the fixed twist/swing/lean pose; this
+  session added the ink tie points, the bridle and the motion. **Each cord ties
+  onto the letter's ink, not its bounding box** (added 2026-09-15 after the
+  user pointed out the "M" and "h" cords ended in mid-air): `inkAnalysis()`
+  reads the glyph back out of the atlas canvas, takes
+  the column through its centre of mass and the first ink down that column in
+  the glyph's largest connected piece — so the "h" hangs from its shoulder, the
+  "o" from its apex, and the "i" cord passes through the dot (its own piece) to
+  the stem. A letter whose tie would land more than 40 % of the way down (the
+  "M", open V at the top) gets a **bridle** instead: two legs (`uLetterLegs`)
+  from the cord's end to the highest ink either side of the column, the ring
+  0.42 × the leg span above them. Because the tie column isn't the bbox centre,
+  `uLetterSize.zw` carries the card's offset from the cord (x of its centre, y
+  of its top edge, in the letter frame). **They are real 3D extrusions, not
+  quads**: the atlas is a signed distance field of each glyph (exact Euclidean
+  distance transform, Felzenszwalb
+  & Huttenlocher, computed in JS from the anti-aliased canvas mask; stored as an
+  `R32F` texture, `LINEAR` if `OES_texture_float_linear` is available), and the
+  shader sphere-traces `max(sdf2D, |z| − T/2)` inside each letter's box, taking
+  side normals from the field's gradient — so undersides go dark and twisted
+  letters show their edges, which is what made them stop looking flat. Each
+  letter has its own frame with the origin *at the tube*: a twist about the
+  wire (`twist`, ±4–15°), then a pendulum tilt back/forth (`swing`, ±1–4°) and
+  side to side (`lean`, ±0.5–2.5°) applied to wire and letter together, plus a
+  few cm of `slack` so the baseline isn't a ruler line — the user asked for
+  "sway back and forth a tiny amount, rotate left to right a little, a bit more
+  free flow" and for every wire to visibly reach the lights. **In the video loop
+  each letter also moves** (`pose(t)`, `LOOP = 6` s): its twist wobbles ±5° once
+  per loop (a slow turn on the wire), its swing ±2° and lean ±1.2° three times per
+  loop (a 2 s pendulum period, about right for wires this long), each scaled by a
+  per-letter `vigour` (0.7–1.3) and offset by per-letter `phase`s so nothing is
+  in step; every term is `sin(ωt + φ) − sin(φ)`, zero at t = 0, so frame 0 is
+  exactly the still, and whole cycles per loop make it seamless. Layout in metres:
+  `CAP_H = 0.45`, `WIRE = 0.4` (tube to the tallest letters), tracking 0.06 em.
+  **Each word hangs from its own tube** — the two either side of the hall's
+  centre line — pushed together as far as the 0.8 m gap between tube ends
+  allows (`inset`); that's why the name sits ~0.5 m left of centre ("Malachi" is
+  longer than "Topp") and can't be centred without a wire landing in the gap.
+  The layout **throws** if any wire would miss a tube, and checks `LETTER_N` in
+  the shader equals the letter count. Per-letter uniform arrays carry the
+  attachment point + wire length, half-width/height + card offset, atlas uv, a
+  `mat3` rotation and the bridle legs (all 0 for a plain cord); `uLetterScale`
+  is metres per atlas pixel; `uLetterMin/Max` is one bounding box (padded to
+  cover the letters' whole range of motion) so rays that never go near skip the
+  loop. The `row` param picks
+  the tube row: 2 (first row inside the landscape frame) for landscape, **3 for
+  portrait** because at FOV 80° the front row's frame is too narrow — the "M"
+  landed on the edge and `object-fit: cover` would have cropped it. JS reads the
+  scene constants it needs (`TUBE_Y`, `COL0`, …) out of the shader source with a
+  regex so the two can't drift. To inspect the letters at native resolution,
+  crop the JPEG (PowerShell `System.Drawing` `Bitmap.Clone` works with no
+  extra tools) rather than eyeballing the downscaled whole.
+- **Font for the name**: the *Endless* sleeve's "ENDLESS" wordmark is **Eurostile
+  Bold Extended** — commercial, not installed on either machine. **Michroma**
+  (Google Fonts, SIL OFL) is the open look-alike and is checked in as
+  `tools/studio-render/Michroma-Regular.ttf` (64 KB, meant to be committed). It
+  ships one weight only, so the canvas strokes the outline (`lineWidth = 0.05
+  em`) to push it towards the sleeve's bold. Declared via `@font-face` in
+  `index.html`, awaited with `document.fonts.load()` before drawing (throws if
+  it didn't load); needs the Chrome flag noted in config bugs.
 - **Rendering notes**: next-event estimation picks one tube per bounce, weighted
   by proximity/facing for diffuse surfaces and by a Gaussian around the mirror
   direction for the floor's glossy lobe (`glossyLight`) — this replaced a naive
@@ -263,11 +431,17 @@ name + Spotify content that used to be the whole site now lives on its own page.
 - **Post (in JS)**: average samples → auto-exposure so the median pixel sits at
   0.34 → 3×3 firefly clamp → bloom (two box-blur radii on highlights) → ACES-style
   tone curve → extra contrast (0.45) → gamma → vignette → grain → greyscale JPEG
-  q0.84. Tweak the look here, not in the shader, when possible.
+  q0.84. Tweak the look here, not in the shader, when possible. Everything after
+  exposure is one function, `filmLook(lum, exposure)`, used for the still and for
+  every video frame with the still's exposure, so a frame can never be graded
+  differently from the still.
 - References the user gave: the Ithacan's *Endless* review still
-  (`theithacan.org/.../endless.jpg`, front-on with big factory windows) and a
+  (`theithacan.org/.../endless.jpg`, front-on with big factory windows), a
   vinyl-sleeve photo (long hall, tubes receding, stud wall on the right — the
-  render is closest to this one). Both sites 403 plain fetches; `curl` with a
+  render is closest to this one), and (2026-09-15, for the font) the Saint Marie
+  Records *Endless* vinyl listing image (`saintmarierecords.com/cdn/shop/
+  products/frank-ocean-endless-…jpg`, arrived as a Google Images result URL —
+  take the `imgurl=` param). All of these 403 plain fetches; `curl` with a
   browser User-Agent worked.
 
 ### `/spotify` — `SpotifyPage.tsx` (the old home page, unchanged look)
@@ -298,13 +472,33 @@ name + Spotify content that used to be the whole site now lives on its own page.
 ## Remaining work
 - **Studio hotspots** (the actual point of the studio): decide what objects go in
   the warehouse and where they link (Spotify page, art, etc.). The user wants to
-  choose the contents; don't populate it unprompted. When objects are added they
-  will need to be composited over the render (positioned with the same
-  fractional-coordinate trick the bubble uses) or rendered into the scene.
-- **Check the final renders** once `render.mjs` has been run at full quality
-  (2026-09-15: a full render was in progress at the end of the session — the
-  files in `assets/` may still be the 64-spp previews copied in as placeholders;
-  rerun `node tools/studio-render/render.mjs` if they look noisy).
+  choose the contents; don't populate it unprompted. The precedent so far
+  (board, hanging name) is to **render objects into the scene**; making one
+  clickable will mean an invisible HTML hit area positioned over the photo with
+  the same fractional-coordinate trick the home-page bubble uses (separately for
+  the landscape and portrait renders, whose framings differ). The video loop now
+  sits over the still with `pointer-events: none`, so hit areas go above it.
+- **Floating Zs (snoring) and music notes — discussed 2026-09-15, not started,
+  blocked on the user.** They asked whether the renderer can do these too.
+  Recommended split, which they haven't answered yet: render the *object* making
+  the sound into the scene, and draw the Zs / notes as an animated SVG or CSS
+  overlay positioned over the photo with the home-page bubble's
+  fractional-coordinate trick. The overlay is free to iterate on and can be live:
+  notes could float only while `/api/now-playing` says something is playing. The
+  alternative, rendering them into the loop like the name, works technically
+  (extruded glyphs, a patch covering their whole rise) but their rise needs a far
+  bigger patch than the swaying letters, so loops render longer and the MP4s get
+  heavier, and anything that glows would relight the whole frame and break the
+  patch trick. **Open question for the user:** nothing in the studio sleeps or
+  plays music yet — what would be snoring, and where does the music come from (a
+  record player, a speaker…)? Don't invent it. Remember inline SVG needs
+  `overflow: visible` for Zs that drift past the viewBox (see config bugs).
+- **Commit the studio work from 2026-09-15**: the board move, the hanging name
+  (3D letters, ink tie points, bridle, motion), `tools/studio-render/
+  Michroma-Regular.ttf`, the two re-rendered JPEGs, the two new MP4 loops
+  (`frontend/src/assets/studio-*.mp4`), the `ffmpeg-static` devDependency in the
+  root `package.json`/lock, the `.gitignore` line for `preview-*.mp4` and the
+  `Studio.tsx`/`Studio.css` video layer were all left uncommitted.
 - **Backend review leftovers** (user is fixing these themselves, walking through
   together):
   - `getCurrent.ts`: guard `data.item === null` → return `{ is_playing: false }`.
@@ -322,26 +516,38 @@ name + Spotify content that used to be the whole site now lives on its own page.
 - Leftover Vite template assets are unused: `frontend/src/assets/hero.png`,
   `react.svg`, `vite.svg`, `frontend/public/icons.svg`, `frontend/README.md`
   (`public/favicon.svg` is still referenced by `index.html`).
-- Ideas discussed earlier, not started: **video background** (full-bleed
-  `<video autoplay muted loop playsinline>`, `object-fit: cover`, poster +
-  reduced-motion fallback). Superseded in spirit by the photo home page but not
-  ruled out for other pages.
+- Idea discussed earlier: **video background** (full-bleed `<video autoplay
+  muted loop playsinline>`, `object-fit: cover`, poster + reduced-motion
+  fallback). The studio now uses exactly this pattern for the letter loop; still
+  an option for other pages.
 
 ## Local dev environment
 - `docker-compose.yaml`: single `db` service, `postgres:17`, named volume
   `pgdata`, port `5432:5432`, `restart: unless-stopped`.
-- `.env` (gitignored) holds: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
-  (read by Compose), `DATABASE_URL`, `CLIENT_ID`, `CLIENT_SECRET`,
-  `REDIRECT_URI`, `SPOTIFY_REFRESH_TOKEN` (twice, see bugs), and
-  `ENABLE_SPOTIFY_LOGIN=true` (local-only flag). Names only here — never copy
-  values into this doc.
+- `.env` (gitignored) var names — never copy values into this doc. On the laptop
+  it held `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (read by Compose),
+  `DATABASE_URL`, `CLIENT_ID`, `CLIENT_SECRET`, `REDIRECT_URI`,
+  `SPOTIFY_REFRESH_TOKEN` and `ENABLE_SPOTIFY_LOGIN=true`. **On the desktop
+  (re-checked 2026-09-15) it holds the same set**: the three `POSTGRES_*`,
+  `DATABASE_URL`, `REDIRECT_URI`, `CLIENT_ID`, `CLIENT_SECRET`,
+  `SPOTIFY_REFRESH_TOKEN` (still twice, see bugs) and `ENABLE_SPOTIFY_LOGIN`.
+  Four of those keys have a space before `=`; Node trims it, and a check with
+  `node --env-file=.env` confirmed all four load and that none of them is set in
+  the Windows environment. This corrects an earlier note that said they were
+  missing from the file. `ENABLE_SPOTIFY_LOGIN` loads as `true`, so `/login` and
+  `/callback` are mounted on the desktop too.
+- Two machines are used: a laptop (Intel Iris Xe; the earlier sessions) and a
+  desktop (AMD Radeon RX 6950 XT, Node 24, npm 11; **no Docker installed** —
+  `docker info` fails, so Postgres can't be started there until it is; nothing
+  needs the DB yet).
 - Run: `npm run build && npm run start` from the repo root (backend,
   `http://127.0.0.1:3000`), and `npm run dev` inside `frontend/` (Vite,
-  `http://localhost:5173` — open this one). Postgres (`docker compose up`) only
-  needed once DB-backed features exist.
+  `http://localhost:5173` — open this one; the studio is `/studio`). Postgres
+  (`docker compose up`) only needed once DB-backed features exist.
 - `.gitignore` ignores `*.png` (so reference photos can sit in the repo folder
-  without being committed) and `tools/studio-render/preview-*.jpg`. The JPEGs in
-  `frontend/src/assets/` are **meant** to be committed — the site needs them.
+  without being committed), `dist/`, and `tools/studio-render/preview-*.jpg` /
+  `preview-*.mp4`. The JPEGs **and MP4s** in `frontend/src/assets/` are **meant**
+  to be committed — the site needs them.
 - UI verification used in sessions: headless Chrome
   (`C:/Program Files/Google/Chrome/Application/chrome.exe`) driven over the
   DevTools protocol from small Node scripts kept in the session scratchpad (not
@@ -353,6 +559,18 @@ name + Spotify content that used to be the whole site now lives on its own page.
   each screenshot (`Page.captureScreenshot` is far too slow to catch frames live).
   First screenshot after a CSS edit can catch Vite mid-recompile — take a warm-up
   shot.
+- Checking the studio video (2026-09-15): `npm run build` in `frontend/`, serve
+  `frontend/dist` from a tiny Node static server with an SPA fallback **and HTTP
+  Range support** (video needs it), launch Chrome with
+  `--autoplay-policy=no-user-gesture-required`, and read the `<video>`'s
+  `readyState` / `currentTime` / `paused` / `error` twice a few seconds apart.
+  Run the Chrome driver with async `execFile`, not `execFileSync`: a sync child
+  call blocks the server's event loop and the page never loads. (`npx vite
+  preview` spawned through a shell from Node didn't come up in 30 s.) To judge
+  motion without playing video, tile a few frames into one image with
+  ffmpeg-static, e.g. `-vf "select='not(mod(n\,36))',crop=W:H:X:Y,tile=1x4"`, or
+  difference-blend two frames to confirm only the letters' patch changes. To zoom
+  into a render, crop and upscale with PowerShell `System.Drawing`.
 
 ## Deployment plan (not started yet)
 - Target: something like Vercel/Netlify — frontend built via Vite, backend as
@@ -376,9 +594,10 @@ name + Spotify content that used to be the whole site now lives on its own page.
 ```
 website-/                        (repo root)
 ├── .env                         (gitignored; see Local dev for var names)
-├── .gitignore                   (*.png, tools/studio-render/preview-*.jpg, …)
+├── .gitignore                   (*.png, tools/studio-render/preview-*.{jpg,mp4}, …)
 ├── docker-compose.yaml
-├── package.json / package-lock.json / tsconfig.json     (backend)
+├── dist/                        (gitignored backend build output from `npm run build`)
+├── package.json / package-lock.json / tsconfig.json     (backend; devDependency ffmpeg-static for tools/studio-render)
 ├── src/
 │   ├── backend/
 │   │   ├── db.ts                (Pool from DATABASE_URL)
@@ -393,9 +612,10 @@ website-/                        (repo root)
 │       └── migrations_002.sql   (empty)
 ├── tools/
 │   └── studio-render/
-│       ├── index.html           (WebGL2 path tracer + film post-processing)
-│       ├── render.mjs           (headless-Chrome driver; writes the studio JPEGs)
-│       └── preview-*.jpg        (gitignored quick renders)
+│       ├── index.html           (WebGL2 path tracer: hall, blackboard, hanging name; film post)
+│       ├── render.mjs           (headless-Chrome driver; writes the studio JPEGs and MP4 loops)
+│       ├── Michroma-Regular.ttf (OFL font for the hanging name; commit it)
+│       └── preview-*.jpg/.mp4   (gitignored quick renders)
 ├── frontend/                    (Vite React app, own package.json/tsconfigs/eslint.config.js)
 │   ├── index.html               (Google Fonts link for Bodoni Moda, title)
 │   ├── vite.config.ts           (dev proxy: /api → http://127.0.0.1:3000)
@@ -408,7 +628,7 @@ website-/                        (repo root)
 │       ├── App.css              (Spotify page: name, table, now-playing, SnoopyLedge styles)
 │       ├── Home.tsx / Home.css  (baby photo, thought bubble, zoom-in transition)
 │       ├── ThoughtCloud.tsx     ("click me!" cloud SVG)
-│       ├── Studio.tsx / Studio.css   (rendered warehouse photo + back button)
+│       ├── Studio.tsx / Studio.css   (rendered warehouse photo, video loop on top, back button)
 │       ├── SpotifyPage.tsx      (name + NowPlaying + TopArtists)
 │       ├── NowPlaying.tsx       (album art with SnoopyLedge hover)
 │       ├── TopArtists.tsx       (time-range buttons + ranked table)
@@ -416,6 +636,7 @@ website-/                        (repo root)
 │       └── assets/
 │           ├── baby-me-1200.jpg / baby-me-2000.jpg   (home photo)
 │           ├── studio-landscape.jpg / studio-portrait.jpg   (from tools/studio-render)
+│           ├── studio-landscape.mp4 / studio-portrait.mp4   (6 s loops of the same frames, letters swaying)
 │           └── hero.png, react.svg, vite.svg         (unused template leftovers)
 ├── context/                     (this folder)
 └── .claude/skills/update/SKILL.md   (the /update skill that maintains this file)
@@ -451,15 +672,46 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
   a photographic render, not a nicer drawing.
 - **They'll say "leave it blank, I'll decide how to fill it"** — when they do,
   build the empty stage well and don't invent contents.
+- **They direct the studio like a set** ("push the chalk board back a little
+  more, I want to see the light from the door poking over the top", "hang my
+  name as individual letters off the ceiling lights"). Their frame of reference
+  is the *committed JPEG they're looking at*, not the shader constants — check
+  the two agree before judging what "a little more" means. Work the physics of
+  the shot (angles, what occludes what), preview a few candidate values, pick one,
+  full-render, and say what the trade-off was; they accept a judgment call plus
+  an offered alternative. Sizes in the scene are in metres — reason in those.
 - **Visual fidelity matters.** They pushed back when Snoopy didn't "actually look
   like Snoopy". Same standard applies to the studio: it should read as the
   *Endless* warehouse, not a generic room.
+- **They spot defects precisely from the picture** ("some of the letters aren't
+  connected with the ceiling", then mid-turn "the H isn't connected either").
+  Zoom into the render at native resolution and check every instance of the
+  problem, not only the one they named.
+- **Motion words mean real motion.** They asked for letters that "sway back and
+  forth a tiny amount, and rotate left to right"; a still frozen mid-swing got
+  "how come you didn't make them move a little bit?". When the medium can't do
+  what they described (a JPEG can't move), say so up front and build the version
+  that can (here the video loop) instead of quietly delivering the closest static
+  thing.
+- **They sometimes run two Claude Code sessions on this repo at once.** On
+  2026-09-15 a second session got the same hanging-letters request and rewrote
+  `tools/studio-render/index.html` and the JPEGs mid-task. Before a big edit to a
+  file with uncommitted changes, check for peer sessions and whether the file
+  changed since it was read; coordinate by message and build on what's on disk.
+- **They like adding small bits of life to scenes** (sleeping Snoopy's Zs
+  earlier; now asking for floating Zs and music notes in the studio). Lay out how
+  it could work and ask what the source object is, rather than placing one.
+- Still learning Claude Code's own controls (asked how to stop a running prompt —
+  **Esc**; triggered `/claude-api` by accident). Answer those briefly and plainly.
 - Dictates via voice-to-text, so messages can be garbled — read charitably
   ("dog hot" = doghouse, "snorting" = snoring, "Yamu file" = YAML file, "pool dot
   Paul" = connection pool, "open field" = the bubble *opens up* into the scene);
   ask only when genuinely ambiguous.
 - Fairly new to backends/Supabase; Postgres (via Docker migrations) is the only
   database they've used.
-- Sessions started with `website-/` as the working directory pick up the
-  project-scoped `/update` skill correctly (an earlier session rooted at the parent
-  `my website/` folder didn't see it).
+- The repo is now cloned directly at `C:\StartUp apps\my website` (GitHub
+  `Malachitopp/website-`, branch `main`); the working directory is the repo root,
+  so the project-scoped `/update` skill in `.claude/skills/update/` is picked up.
+  (Earlier the clone sat in a nested `website-/` folder and a session rooted one
+  level up didn't see the skill.) "Clone the updated repo into this" meant
+  `git pull` — the folder was already the clone, just behind.
