@@ -28,60 +28,67 @@ const renders = preview
       { file: 'studio-portrait.jpg', w: 1170, h: 2340, fov: 80, spp: 1024 },
     ]
 
-const port = 9400 + Math.floor(Math.random() * 400)
-const chrome = spawn(
-  chromePath,
-  [
-    '--headless=new',
-    `--use-angle=${process.env.ANGLE ?? 'vulkan'}`,
-    '--ignore-gpu-blocklist',
-    '--enable-unsafe-swiftshader',
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${mkdtempSync(join(tmpdir(), 'studio-render-'))}`,
-    'about:blank',
-  ],
-  { stdio: 'ignore' },
-)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-try {
-  let socketUrl
-  for (let i = 0; i < 50 && !socketUrl; i++) {
-    try {
-      const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-      socketUrl = targets.find((t) => t.type === 'page')?.webSocketDebuggerUrl
-    } catch {
-      // Chrome is still starting
+// Each image gets its own Chrome: after a couple of minutes of full-tilt GPU work the
+// browser has been seen to die on the next navigation, which would otherwise leave the
+// script waiting forever on a reply that never comes.
+async function renderInChrome(file, settings) {
+  const port = 9400 + Math.floor(Math.random() * 400)
+  const chrome = spawn(
+    chromePath,
+    [
+      '--headless=new',
+      `--use-angle=${process.env.ANGLE ?? 'vulkan'}`,
+      '--ignore-gpu-blocklist',
+      '--enable-unsafe-swiftshader',
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${mkdtempSync(join(tmpdir(), 'studio-render-'))}`,
+      'about:blank',
+    ],
+    { stdio: 'ignore' },
+  )
+  try {
+    let socketUrl
+    for (let i = 0; i < 50 && !socketUrl; i++) {
+      try {
+        const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
+        socketUrl = targets.find((t) => t.type === 'page')?.webSocketDebuggerUrl
+      } catch {
+        // Chrome is still starting
+      }
+      if (!socketUrl) await sleep(200)
     }
-    if (!socketUrl) await sleep(200)
-  }
-  if (!socketUrl) throw new Error('Chrome did not start')
+    if (!socketUrl) throw new Error('Chrome did not start')
 
-  const socket = new WebSocket(socketUrl)
-  await new Promise((resolve) => socket.addEventListener('open', resolve))
-  let nextId = 1
-  const pending = new Map()
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data)
-    if (message.id) {
-      pending.get(message.id)?.(message)
-      pending.delete(message.id)
-    } else if (message.method === 'Log.entryAdded') {
-      console.log(`[browser ${message.params.entry.level}] ${message.params.entry.text}`)
-    } else if (message.method === 'Runtime.consoleAPICalled') {
-      console.log(`[console.${message.params.type}]`, message.params.args.map((a) => a.value ?? a.description).join(' '))
-    }
-  })
-  const send = (method, params = {}) =>
-    new Promise((resolve) => {
-      const id = nextId++
-      pending.set(id, resolve)
-      socket.send(JSON.stringify({ id, method, params }))
+    const socket = new WebSocket(socketUrl)
+    await new Promise((resolve) => socket.addEventListener('open', resolve))
+    let nextId = 1
+    const pending = new Map()
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data)
+      if (message.id) {
+        pending.get(message.id)?.resolve(message)
+        pending.delete(message.id)
+      } else if (message.method === 'Log.entryAdded') {
+        console.log(`[browser ${message.params.entry.level}] ${message.params.entry.text}`)
+      } else if (message.method === 'Runtime.consoleAPICalled') {
+        console.log(`[console.${message.params.type}]`, message.params.args.map((a) => a.value ?? a.description).join(' '))
+      }
     })
-  await send('Log.enable')
-  await send('Runtime.enable')
+    socket.addEventListener('close', () => {
+      for (const { reject } of pending.values()) reject(new Error(`Chrome went away while rendering ${file}`))
+      pending.clear()
+    })
+    const send = (method, params = {}) =>
+      new Promise((resolve, reject) => {
+        const id = nextId++
+        pending.set(id, { resolve, reject })
+        socket.send(JSON.stringify({ id, method, params }))
+      })
+    await send('Log.enable')
+    await send('Runtime.enable')
 
-  for (const { file, ...settings } of renders) {
     const page = pathToFileURL(join(here, 'index.html'))
     page.search = new URLSearchParams(Object.entries(settings).map(([k, v]) => [k, String(v)])).toString()
     await send('Page.navigate', { url: page.href })
@@ -96,8 +103,10 @@ try {
     writeFileSync(join(outDir, file), Buffer.from(result.jpeg.split(',')[1], 'base64'))
     console.log(`${file}: ${settings.w}×${settings.h}, ${settings.spp} spp in ${result.renderMs} ms on ${result.gpu}`)
     if (process.argv.includes('--stats')) console.log(result.stats)
+    socket.close()
+  } finally {
+    chrome.kill()
   }
-  socket.close()
-} finally {
-  chrome.kill()
 }
+
+for (const { file, ...settings } of renders) await renderInChrome(file, settings)
