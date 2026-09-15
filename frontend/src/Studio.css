@@ -70,6 +70,85 @@
   }
 }
 
+/* the note at the top the first time you're at the door, with an × to close it (see Studio);
+   it drops in a moment after you arrive */
+.studio-hint {
+  position: fixed;
+  top: 16px;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto;
+  padding: 4px 4px 4px 16px;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.2;
+  color: #1c1c1c;
+  background: #fbfbf8;
+  border: 3px solid #1c1c1c;
+  border-radius: 999px;
+  box-shadow: 0 3px 0 #1c1c1c;
+  animation: studio-hint-in 0.4s 0.6s ease-out both;
+}
+
+/* too narrow to sit beside the back button: under it */
+@media (max-width: 520px) {
+  .studio-hint {
+    top: 68px;
+  }
+}
+
+.studio-hint-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background-color 0.15s;
+
+  & svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  &:hover {
+    background-color: rgb(28 28 28 / 0.1);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #1c1c1c;
+    outline-offset: 1px;
+  }
+}
+
+@keyframes studio-hint-in {
+  from {
+    opacity: 0;
+    translate: 0 -12px;
+  }
+}
+
+@keyframes studio-hint-fade {
+  from {
+    opacity: 0;
+  }
+}
+
 /* ---- the music corner (MusicCorner.tsx) ---- */
 
 .studio-overlay {
@@ -863,6 +942,11 @@
     & svg {
       animation: none;
     }
+  }
+
+  /* fades in and out without dropping */
+  .studio-hint {
+    animation-name: studio-hint-fade;
   }
 
   .holo-float,

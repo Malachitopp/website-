@@ -25,8 +25,10 @@ into the shots, breathing in the loops; not a clickable item yet). The second it
 board, a tall crate of books with an open laptop on it (its screen shows GitHub's mark), a
 second Carby Musk candle burning beside it, and scribbled sheets of physics on the floor;
 press it to walk up (`/studio/laptop`) and the screen wakes to a home screen of shortcuts
-("all my links and academic stuff" — just GitHub so far, the user names the rest). The
-name + Spotify content that used to be the whole site still lives on its own page.
+("all my links and academic stuff" — GitHub and email so far, the user names the rest).
+On arriving in the studio a dismissible note at the top says "explore by pressing on
+things" (added 2026-09-15). The name + Spotify content that used to be the whole site
+still lives on its own page.
 
 ## Stack decisions made so far
 - **Frontend**: React via Vite (`react-ts` template), lives in `frontend/` with its
@@ -40,8 +42,8 @@ name + Spotify content that used to be the whole site still lives on its own pag
   on the History API: `usePathname()` (via `useSyncExternalStore`, listening to
   `popstate` plus a custom `app:navigate` event because `pushState` fires nothing),
   `navigate(to)`, and `isModifiedClick(event)` so ctrl/middle-clicks still open
-  new tabs. `App.tsx` is a `switch` on the pathname: `/studio` and `/studio/music`
-  → `Studio` (the same element, so it keeps its state and walks between them),
+  new tabs. `App.tsx` is a `switch` on the pathname: `/studio`, `/studio/music` and
+  `/studio/laptop` → `Studio` (the same element, so it keeps its state and walks between them),
   `/spotify` → `SpotifyPage`, anything else → `Home`.
 - **Backend**: Node + TypeScript + Express 5, in `src/backend/`. Compiled with `tsc`
   (root `tsconfig.json`, `rootDir: ./src`, `outDir: ./dist`) — so the real entry
@@ -290,9 +292,14 @@ name + Spotify content that used to be the whole site still lives on its own pag
   - Writing to `.env` doesn't update `process.env` — restart after re-consenting.
   - No UI login button, by design. Re-run `/login` by hand only if the token is
     revoked or scopes change.
-- `get_accessToken(refreshToken)` (exported from `auth.ts`): refresh-token grant,
-  **throws if `!response.ok`** (Express 5 turns that into a 500) instead of
-  silently returning `undefined`. Called fresh per request; nothing cached.
+- `get_accessToken(refreshToken)` (exported from `auth.ts`): **caches the access
+  token** (the user added this, committed in `213ab43`): module-level `cachedToken` +
+  `expiresAt` (from `expires_in`), reused until 60 s before it expires; otherwise
+  `refresh_accessToken()` does the refresh-token grant, and concurrent callers share
+  one in-flight `refreshing` promise (cleared in `.finally`) so a burst of requests
+  refreshes once. The refresh **throws if `!response.ok`** (Express 5 turns that into
+  a 500) instead of silently returning `undefined`. In-memory, so per server process
+  (a serverless host would refresh per cold start — fine).
 - `GET /api/now-playing` (`getCurrent.ts`): handles 204 (nothing playing) →
   `{ is_playing: false }`, 400 on other non-OK, returns reshaped
   `is_playing, track, artist, albumArt, songUrl`. **Still missing**: a guard for

@@ -138,6 +138,7 @@ function Studio() {
   const [walk, setWalk] = useState<Walk | null>(null)
   const [walkFrame, setWalkFrame] = useState(0)
   const [loadedStill, setLoadedStill] = useState<string | null>(null)
+  const [hint, setHint] = useState<'unseen' | 'showing' | 'closed'>('unseen')
 
   const shots = SHOTS[framing]
   const still = shots[view].still
@@ -254,6 +255,11 @@ function Studio() {
   const closeUp = (shot: CloseUp): Lens => ({ camera: framingScene[shot], size: framingScene.size, width, height })
   const overview = settled && view === 'overview'
 
+  // The first time you're stood at the door, a note at the top says what to do. It stays until
+  // it's closed, or you walk up to something.
+  if (overview && hint === 'unseen') setHint('showing')
+  else if (!overview && hint === 'showing') setHint('closed')
+
   return (
     <main className={`studio${walk && !walk.playing ? " is-setting-off" : ""}`} ref={rootRef}>
       <picture key={view}>
@@ -331,6 +337,16 @@ function Studio() {
       >
         ← back
       </a>
+      {hint === 'showing' && (
+        <div className="studio-hint" role="status">
+          explore by pressing on things
+          <button type="button" className="studio-hint-close" aria-label="Close" onClick={() => setHint('closed')}>
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M2 2l8 8M10 2l-8 8" />
+            </svg>
+          </button>
+        </div>
+      )}
     </main>
   )
 }
