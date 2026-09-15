@@ -8,11 +8,14 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 
 const authRouter =Router() 
+const pendingStates = new Set<string>() 
 
 authRouter.get('/login', (req:Request,res:Response)=>{
     const state = randomBytes(16).toString('hex');
     const scope = 'user-read-currently-playing user-read-private user-top-read'
 
+    pendingStates.add(state)
+    setTimeout(()=> pendingStates.delete(state), 10 * 60_000)
 
     const params = new URLSearchParams({
     response_type: 'code',
@@ -27,18 +30,22 @@ authRouter.get('/login', (req:Request,res:Response)=>{
     );
 })
 
-import querystring from 'node:querystring'
+
 
 authRouter.get('/callback', async (req:Request, res: Response) => {
-    const code = req.query.code || null;
-    const state = req.query.state || null;
+    const code = req.query.code;
+    const state = req.query.state;
 
-    if (state === null) {
-    res.redirect('/#' +
-      querystring.stringify({
-        error: 'state_mismatch'
-      }));
-    } else {
+    if (typeof state !== 'string' || !pendingStates.has(state)) {
+        res.status(400).send('state mismatch')
+        return 
+    } 
+    pendingStates.delete(state);
+    if (typeof code !== 'string'){ 
+        res.status(400).send('no code')
+        return 
+    }
+    
     const response = await fetch('https://accounts.spotify.com/api/token', {
         method: 'POST',
         headers: {
@@ -47,7 +54,7 @@ authRouter.get('/callback', async (req:Request, res: Response) => {
             .toString('base64'),
         },
         body: new URLSearchParams({
-            code: code as string,
+            code: code,
             redirect_uri: redirect_uri!,
             grant_type: 'authorization_code',
         }),
@@ -64,7 +71,7 @@ authRouter.get('/callback', async (req:Request, res: Response) => {
 
     res.redirect('http://localhost:5173');
   }
-});
+);
 
 export async function get_accessToken(refreshToken:string) {
     const response = await fetch('https://accounts.spotify.com/api/token', {
@@ -79,7 +86,11 @@ export async function get_accessToken(refreshToken:string) {
             refresh_token: refreshToken,
         }),
     });
+    if (!response.ok) {
+        throw new Error(`failed to refresh access token: ${response.status} ${await response.text()}`)
+    }
     const data = await response.json()
+
     return data.access_token;
 }
 

@@ -10,7 +10,6 @@ type Artist = {
 const TIME_RANGES = [
   { value: 'short_term', label: 'Last 4 weeks' },
   { value: 'medium_term', label: 'Last 6 months' },
-  { value: 'long_term', label: 'All time' },
 ]
 
 function TopArtists() {
@@ -18,12 +17,27 @@ function TopArtists() {
   const [timeRange, setTimeRange] = useState('medium_term')
 
   useEffect(() => {
-    setArtists(null)
+    let ignore = false
     fetch(`/api/top/artists?time_range=${timeRange}`)
-      .then((res) => res.json())
-      .then(setArtists)
-      .catch(() => setArtists([]))
+      .then((res) => {
+        if (!res.ok) throw new Error(res.statusText)
+        return res.json()
+      })
+      .then((data) => {
+        if (!ignore) setArtists(data)
+      })
+      .catch(() => {
+        if (!ignore) setArtists([])
+      })
+    return () => {
+      ignore = true
+    }
   }, [timeRange])
+
+  const selectTimeRange = (value: string) => {
+    setArtists(null)
+    setTimeRange(value)
+  }
 
   return (
     <div>
@@ -33,7 +47,7 @@ function TopArtists() {
             key={range.value}
             type="button"
             disabled={range.value === timeRange}
-            onClick={() => setTimeRange(range.value)}
+            onClick={() => selectTimeRange(range.value)}
           >
             {range.label}
           </button>
@@ -43,16 +57,23 @@ function TopArtists() {
       {!artists && <p>Loading...</p>}
       {artists && artists.length === 0 && <p>Couldn't load top artists</p>}
       {artists && artists.length > 0 && (
-        <ol className="top-artists">
-          {artists.map((artist) => (
-            <li key={artist.name}>
-              {artist.image && <img src={artist.image} width={80} alt={`${artist.name}`} />}
-              <a href={artist.spotifyUrl} target="_blank" rel="noreferrer">
-                {artist.name}
-              </a>
-            </li>
-          ))}
-        </ol>
+        <table className="top-artists">
+          <tbody>
+            {artists.map((artist, index) => (
+              <tr key={artist.spotifyUrl}>
+                <td className="artist-rank">{index + 1}</td>
+                <td className="artist-image">
+                  {artist.image && <img src={artist.image} width={80} alt={`${artist.name}`} />}
+                </td>
+                <td className="artist-name">
+                  <a href={artist.spotifyUrl} target="_blank" rel="noreferrer">
+                    {artist.name}
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   )

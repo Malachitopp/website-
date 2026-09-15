@@ -5,11 +5,10 @@ import './spotify/getTop.js';
 
 const app: Express = express();
 
-app.get('/', (req: Request, res: Response) => {
-  res.send('Hello World!');
-});
+if (process.env.ENABLE_SPOTIFY_LOGIN === 'true') {
+  app.use(authRouter);
+}
 
-app.use(authRouter);
 app.use('/api', spotifyRouter);
 
 app.listen(3000);

@@ -17,6 +17,10 @@ build/
 npm-debug.log*
 *.log
 
+# images
+*.png
+tools/studio-render/preview-*.jpg
+
 # OS/editor
 .DS_Store
 Thumbs.db

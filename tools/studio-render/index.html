@@ -1,0 +1,602 @@
+<!doctype html>
+<!--
+  Offline renderer for the studio page's warehouse image.
+
+  A small WebGL2 path tracer: the warehouse is a big box with procedural surfaces, lit
+  only by rows of fluorescent tubes (plus a glowing loading door at the far end). Every
+  frame adds one more light path per pixel; after enough frames the noise settles into
+  something photographic, then a black-and-white film look is applied in JS.
+
+  Not part of the site. Run `node tools/studio-render/render.mjs` from the repo root to
+  regenerate frontend/src/assets/studio-*.jpg. Query params: w, h, fov (vertical, deg),
+  spp (samples per pixel).
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>studio render</title>
+  </head>
+  <body style="margin: 0; background: #111">
+    <canvas id="out"></canvas>
+    <script type="x-shader/x-vertex" id="vs">#version 300 es
+      in vec2 aPos;
+      void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+    </script>
+    <script type="x-shader/x-fragment" id="fs">#version 300 es
+      precision highp float;
+      precision highp int;
+
+      uniform sampler2D uPrev;
+      uniform vec2 uRes;
+      uniform int uFrame;
+      uniform float uTanY;
+      out vec4 outColor;
+
+      const float PI = 3.14159265;
+
+      // ---- the building (metres). Camera looks down +z from near the front wall. ----
+      const vec3 CAM = vec3(0.0, 1.6, 0.0);
+      const float HALF_W = 8.0;
+      const float H = 6.4;
+      const float FRONT = -3.0;
+      const float BACK = 52.0;
+
+      const int ROWS = 16;
+      const int COLS = 4;
+      const float ROW0 = 2.5;
+      const float ROW_STEP = 3.1;
+      const float COL0 = -5.4;
+      const float COL_STEP = 3.6;
+      const float TUBE_HALF_LEN = 1.4;
+      const float TUBE_HALF_W = 0.055;
+      const float TUBE_Y = 5.6; // underside of the tubes
+      const float TUBE_T = 0.06;
+      const float TUBE_LE = 24.0;
+      const float TUBE_AREA = 4.0 * TUBE_HALF_LEN * TUBE_HALF_W;
+
+      const float STUD_DEPTH = 0.16;
+      const float STUD_STEP = 1.22;
+      const float STUD_HALF = 0.035;
+
+      const float BEAM_STEP = 6.0;
+      const float BEAM_OFF = 4.0;
+      const float BEAM_HALF = 0.16;
+      const float BEAM_DEPTH = 0.55;
+
+      const float DOOR_HALF_W = 2.8;
+      const float DOOR_H = 4.0;
+      const float DOOR_LE = 1.6;
+
+      // sealed concrete: a narrow glossy lobe (Phong exponent) around the mirror direction
+      const float GLOSS_N = 300.0;
+      const float GLOSS_SPREAD = 0.058; // ≈ 1/sqrt(GLOSS_N) radians
+
+      const int M_NONE = 0, M_FLOOR = 1, M_CEIL = 2, M_LEFT = 3, M_RIGHT = 4, M_BACK = 5,
+        M_FRONT = 6, M_STUD = 7, M_BEAM = 8, M_TUBE = 9, M_PIPE = 10, M_PLATE = 11;
+
+      struct Hit { float t; vec3 n; int m; };
+
+      // ---- random numbers & noise ----
+      uint rngState;
+      uint pcg(uint v) {
+        uint s = v * 747796405u + 2891336453u;
+        uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+        return (w >> 22u) ^ w;
+      }
+      float rnd() { rngState = pcg(rngState); return float(rngState) / 4294967295.0; }
+
+      float hash2(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash2(i), hash2(i + vec2(1, 0)), u.x),
+                   mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), u.x), u.y);
+      }
+      float fbm(vec2 p) {
+        float v = 0.0, a = 0.5;
+        for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+        return v;
+      }
+
+      // ---- intersection ----
+      vec3 safeDir(vec3 d) { return d + vec3(1e-7) * (1.0 - abs(sign(d))); }
+
+      void shell(vec3 o, vec3 d, inout Hit h) {
+        vec3 far = mix(vec3(-HALF_W, 0.0, FRONT), vec3(HALF_W, H, BACK), step(0.0, d));
+        vec3 t = (far - o) / d;
+        float best = t.x; vec3 n = vec3(-sign(d.x), 0, 0); int m = d.x > 0.0 ? M_RIGHT : M_LEFT;
+        if (t.y < best) { best = t.y; n = vec3(0, -sign(d.y), 0); m = d.y > 0.0 ? M_CEIL : M_FLOOR; }
+        if (t.z < best) { best = t.z; n = vec3(0, 0, -sign(d.z)); m = d.z > 0.0 ? M_BACK : M_FRONT; }
+        if (best > 1e-4 && best < h.t) { h.t = best; h.n = n; h.m = m; }
+      }
+
+      bool slab(vec3 o, vec3 d, vec3 bmin, vec3 bmax, out float tn, out float tf, out vec3 n) {
+        vec3 t0 = (bmin - o) / d, t1 = (bmax - o) / d;
+        vec3 lo = min(t0, t1), hi = max(t0, t1);
+        tn = max(max(lo.x, lo.y), lo.z);
+        tf = min(min(hi.x, hi.y), hi.z);
+        n = tn == lo.x ? vec3(-sign(d.x), 0, 0) : tn == lo.y ? vec3(0, -sign(d.y), 0) : vec3(0, 0, -sign(d.z));
+        return tn <= tf && tf > 1e-4;
+      }
+
+      void box(vec3 o, vec3 d, vec3 bmin, vec3 bmax, int m, inout Hit h) {
+        float tn, tf; vec3 n;
+        if (!slab(o, d, bmin, bmax, tn, tf, n) || tn < 1e-4 || tn >= h.t) return;
+        h.t = tn; h.n = n; h.m = m;
+      }
+
+      // Evenly spaced boards along z inside a region (studs, ceiling beams): O(1) per ray
+      void repeatedZ(vec3 o, vec3 d, vec3 bmin, vec3 bmax, float stepZ, float offset, float halfT, int m, inout Hit h) {
+        float tn, tf; vec3 n;
+        if (!slab(o, d, bmin, bmax, tn, tf, n)) return;
+        float ts = max(tn, 1e-4);
+        if (ts >= h.t) return;
+        float z = o.z + d.z * ts;
+        float local = mod(z - offset + 0.5 * stepZ, stepZ) - 0.5 * stepZ;
+        float centre = z - local;
+        if (abs(local) <= halfT) {
+          if (tn > 1e-4) { h.t = tn; h.n = n; h.m = m; }
+          return;
+        }
+        float face;
+        if (d.z > 0.0) face = local < 0.0 ? centre - halfT : centre + stepZ - halfT;
+        else face = local > 0.0 ? centre + halfT : centre - stepZ + halfT;
+        float t = (face - o.z) / d.z;
+        if (t > 1e-4 && t <= tf && t < h.t) { h.t = t; h.n = vec3(0, 0, -sign(d.z)); h.m = m; }
+      }
+
+      void tubes(vec3 o, vec3 d, inout Hit h) {
+        float planeY;
+        vec3 n;
+        if (o.y < TUBE_Y && d.y > 0.0) { planeY = TUBE_Y; n = vec3(0, -1, 0); }
+        else if (o.y > TUBE_Y + TUBE_T && d.y < 0.0) { planeY = TUBE_Y + TUBE_T; n = vec3(0, 1, 0); }
+        else return;
+        float t = (planeY - o.y) / d.y;
+        if (t < 1e-4 || t >= h.t) return;
+        vec3 p = o + d * t;
+        float c = clamp(floor((p.x - COL0) / COL_STEP + 0.5), 0.0, float(COLS - 1));
+        float r = clamp(floor((p.z - ROW0) / ROW_STEP + 0.5), 0.0, float(ROWS - 1));
+        if (abs(p.x - (COL0 + c * COL_STEP)) > TUBE_HALF_LEN) return;
+        if (abs(p.z - (ROW0 + r * ROW_STEP)) > TUBE_HALF_W) return;
+        h.t = t; h.n = n; h.m = M_TUBE;
+      }
+
+      const float PIPE_Z0 = 9.3, PIPE_Z1 = 21.6, PIPE_Z2 = 33.1;
+
+      Hit trace(vec3 o, vec3 d) {
+        Hit h; h.t = 1e9; h.m = M_NONE; h.n = vec3(0);
+        shell(o, d, h);
+        // bare stud wall on the right, with plates and two rows of blocking
+        repeatedZ(o, d, vec3(HALF_W - STUD_DEPTH, 0.0, FRONT), vec3(HALF_W, H, BACK), STUD_STEP, 0.0, STUD_HALF, M_STUD, h);
+        box(o, d, vec3(HALF_W - STUD_DEPTH, 2.05, FRONT), vec3(HALF_W, 2.18, BACK), M_PLATE, h);
+        box(o, d, vec3(HALF_W - STUD_DEPTH, 4.15, FRONT), vec3(HALF_W, 4.28, BACK), M_PLATE, h);
+        box(o, d, vec3(HALF_W - STUD_DEPTH, 0.0, FRONT), vec3(HALF_W, 0.09, BACK), M_PLATE, h);
+        box(o, d, vec3(HALF_W - STUD_DEPTH, H - 0.12, FRONT), vec3(HALF_W, H, BACK), M_PLATE, h);
+        // deep beams across the ceiling
+        repeatedZ(o, d, vec3(-HALF_W, H - BEAM_DEPTH, FRONT), vec3(HALF_W, H, BACK), BEAM_STEP, BEAM_OFF, BEAM_HALF, M_BEAM, h);
+        // conduit pipes running up the left wall
+        box(o, d, vec3(-HALF_W, 0.0, PIPE_Z0 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z0 + 0.045), M_PIPE, h);
+        box(o, d, vec3(-HALF_W, 0.0, PIPE_Z1 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z1 + 0.045), M_PIPE, h);
+        box(o, d, vec3(-HALF_W, 0.0, PIPE_Z2 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z2 + 0.045), M_PIPE, h);
+        tubes(o, d, h);
+        return h;
+      }
+
+      bool occluded(vec3 o, vec3 d, float maxT) {
+        Hit h = trace(o, d);
+        return h.m != M_TUBE && h.t < maxT - 1e-3;
+      }
+
+      // ---- surfaces ----
+      float edgeLine(float v, float width) { return 1.0 - smoothstep(0.0, width, abs(v)); }
+
+      float albedo(int m, vec3 p) {
+        if (m == M_FLOOR) {
+          float a = 0.5;
+          a += 0.12 * (fbm(p.xz * 0.18) - 0.5);
+          a -= 0.13 * smoothstep(0.52, 0.72, fbm(p.xz * 0.7 + 31.0));
+          a -= 0.07 * smoothstep(0.6, 0.8, fbm(p.xz * 3.1 + 7.0));
+          a += 0.05 * (noise(p.xz * 45.0) - 0.5);
+          vec2 cell = abs(mod(p.xz + vec2(0.0, 3.0), vec2(3.75, 6.0)) - vec2(1.875, 3.0));
+          float joint = max(edgeLine(cell.x - 1.875, 0.012), edgeLine(cell.y - 3.0, 0.012));
+          return a * (1.0 - 0.45 * joint);
+        }
+        if (m == M_LEFT) {
+          vec2 q = vec2(p.z, p.y);
+          float a = 0.84;
+          a -= 0.2 * smoothstep(0.58, 0.78, fbm(q * vec2(0.45, 0.7) + 3.0));
+          a -= 0.4 * smoothstep(0.7, 0.86, fbm(q * 2.6 + 11.0));
+          a -= 0.14 * (1.0 - smoothstep(0.0, 0.9, p.y));
+          a += 0.035 * (noise(q * 35.0) - 0.5);
+          // painted-over doorways
+          for (int i = 0; i < 3; i++) {
+            float z0 = 5.0 + float(i) * 15.0;
+            vec2 dq = vec2(abs(p.z - (z0 + 1.1)) - 1.1, p.y - 2.5);
+            float outline = max(edgeLine(dq.x, 0.035) * step(p.y, 2.5), edgeLine(dq.y, 0.035) * step(dq.x, 0.0));
+            a *= 1.0 - 0.35 * outline;
+            if (dq.x < 0.0 && dq.y < 0.0) a += 0.04;
+          }
+          return clamp(a, 0.05, 0.92);
+        }
+        if (m == M_RIGHT) {
+          float a = 0.46 + 0.08 * (fbm(vec2(p.z, p.y) * 0.9) - 0.5);
+          a *= 1.0 - 0.4 * edgeLine(mod(p.z + 1.22, 2.44) - 1.22, 0.01);
+          return a;
+        }
+        if (m == M_STUD || m == M_PLATE) return 0.8 + 0.06 * (noise(vec2(p.z * 3.0, p.y * 0.6)) - 0.5);
+        if (m == M_CEIL) return 0.06;
+        if (m == M_BEAM) return 0.08;
+        if (m == M_PIPE) return 0.62;
+        if (m == M_BACK) {
+          float a = 0.34 + 0.06 * (fbm(p.xy * 0.8) - 0.5);
+          vec2 dq = vec2(abs(p.x) - DOOR_HALF_W, p.y - DOOR_H);
+          if (dq.x < 0.25 && dq.y < 0.25) a = 0.14; // steel frame around the door
+          return a;
+        }
+        return 0.5;
+      }
+
+      float emission(int m, vec3 p) {
+        if (m == M_TUBE) return TUBE_LE;
+        if (m == M_BACK && abs(p.x) < DOOR_HALF_W && p.y < DOOR_H) {
+          float slats = 0.8 + 0.2 * smoothstep(0.3, 0.5, abs(fract(p.x / 0.18) - 0.5) * 2.0);
+          return DOOR_LE * slats * (0.85 + 0.15 * p.y / DOOR_H);
+        }
+        return 0.0;
+      }
+
+      // ---- lighting ----
+      vec3 tubeCentre(int r, int c) { return vec3(COL0 + float(c) * COL_STEP, TUBE_Y, ROW0 + float(r) * ROW_STEP); }
+
+      float tubeWeight(vec3 p, vec3 n, vec3 lc) {
+        vec3 q = vec3(clamp(p.x, lc.x - TUBE_HALF_LEN, lc.x + TUBE_HALF_LEN), TUBE_Y, lc.z);
+        vec3 v = q - p;
+        float d2 = dot(v, v) + 0.2;
+        float inv = inversesqrt(d2);
+        return (max(0.0, v.y * inv) + 0.02) * (max(0.0, dot(n, v) * inv) + 0.02) / d2;
+      }
+
+      // Next-event estimation: pick one tube (nearer, better-facing tubes more often) and
+      // test a shadow ray to a random point on its glowing underside.
+      float directLight(vec3 p, vec3 n) {
+        float total = 0.0;
+        for (int r = 0; r < ROWS; r++) for (int c = 0; c < COLS; c++) total += tubeWeight(p, n, tubeCentre(r, c));
+        float pick = rnd() * total;
+        float w = 0.0;
+        vec3 lc = tubeCentre(ROWS - 1, COLS - 1);
+        bool found = false;
+        for (int r = 0; r < ROWS && !found; r++) for (int c = 0; c < COLS && !found; c++) {
+          vec3 cc = tubeCentre(r, c);
+          w = tubeWeight(p, n, cc);
+          pick -= w;
+          if (pick <= 0.0) { lc = cc; found = true; }
+        }
+        if (!found) w = tubeWeight(p, n, lc);
+        vec3 s = vec3(lc.x + (rnd() * 2.0 - 1.0) * TUBE_HALF_LEN, TUBE_Y, lc.z + (rnd() * 2.0 - 1.0) * TUBE_HALF_W);
+        vec3 v = s - p;
+        float dist2 = dot(v, v);
+        float dist = sqrt(dist2);
+        vec3 dir = v / dist;
+        float cosS = dot(n, dir);
+        float cosL = dir.y;
+        if (cosS <= 0.0 || cosL <= 0.0) return 0.0;
+        if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
+        return TUBE_LE * cosS * cosL * TUBE_AREA / (dist2 * (w / total)) / PI;
+      }
+
+      // How likely the glossy lobe around mirror direction r is to land on a tube: a
+      // Gaussian in the distance from where r crosses the tubes' plane to the tube.
+      float glossyWeight(vec3 p, vec3 r, vec3 lc) {
+        float t = (TUBE_Y - p.y) / r.y;
+        vec3 hp = p + r * t;
+        float dx = max(0.0, abs(hp.x - lc.x) - TUBE_HALF_LEN);
+        float dz = abs(hp.z - lc.z) - TUBE_HALF_W;
+        float sigma = GLOSS_SPREAD * t + 0.02;
+        return exp(-(dx * dx + max(0.0, dz) * max(0.0, dz)) / (2.0 * sigma * sigma)) + 1e-4;
+      }
+
+      // The tubes seen in the floor's glossy reflection, sampled directly so the
+      // reflection converges instead of being a scatter of fireflies.
+      float glossyLight(vec3 p, vec3 n, vec3 r) {
+        if (r.y <= 0.0) return 0.0;
+        float total = 0.0;
+        for (int i = 0; i < ROWS; i++) for (int c = 0; c < COLS; c++) total += glossyWeight(p, r, tubeCentre(i, c));
+        float pick = rnd() * total;
+        float w = 0.0;
+        vec3 lc = tubeCentre(ROWS - 1, COLS - 1);
+        bool found = false;
+        for (int i = 0; i < ROWS && !found; i++) for (int c = 0; c < COLS && !found; c++) {
+          vec3 cc = tubeCentre(i, c);
+          w = glossyWeight(p, r, cc);
+          pick -= w;
+          if (pick <= 0.0) { lc = cc; found = true; }
+        }
+        if (!found) w = glossyWeight(p, r, lc);
+        vec3 s = vec3(lc.x + (rnd() * 2.0 - 1.0) * TUBE_HALF_LEN, TUBE_Y, lc.z + (rnd() * 2.0 - 1.0) * TUBE_HALF_W);
+        vec3 v = s - p;
+        float dist2 = dot(v, v);
+        float dist = sqrt(dist2);
+        vec3 dir = v / dist;
+        float cosS = dot(n, dir);
+        float cosL = dir.y;
+        if (cosS <= 0.0 || cosL <= 0.0) return 0.0;
+        float lobe = pow(max(0.0, dot(r, dir)), GLOSS_N);
+        if (lobe < 1e-5) return 0.0;
+        if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
+        float f = (GLOSS_N + 2.0) / (2.0 * PI) * lobe;
+        return TUBE_LE * f * cosS * cosL * TUBE_AREA / (dist2 * (w / total));
+      }
+
+      vec3 phongSample(vec3 r) {
+        float r1 = rnd(), r2 = rnd();
+        float cosT = pow(r2, 1.0 / (GLOSS_N + 1.0));
+        float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+        float phi = 2.0 * PI * r1;
+        vec3 t = abs(r.y) < 0.9 ? normalize(cross(r, vec3(0, 1, 0))) : normalize(cross(r, vec3(1, 0, 0)));
+        vec3 b = cross(r, t);
+        return normalize(t * cos(phi) * sinT + b * sin(phi) * sinT + r * cosT);
+      }
+
+      vec3 cosineSample(vec3 n) {
+        float r1 = rnd(), r2 = rnd();
+        float phi = 2.0 * PI * r1, r = sqrt(r2);
+        vec3 t = abs(n.y) < 0.9 ? normalize(cross(n, vec3(0, 1, 0))) : normalize(cross(n, vec3(1, 0, 0)));
+        vec3 b = cross(n, t);
+        return normalize(t * cos(phi) * r + b * sin(phi) * r + n * sqrt(1.0 - r2));
+      }
+
+      void main() {
+        rngState = pcg(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(uFrame) * 26699u) | 1u;
+        vec2 uv = (gl_FragCoord.xy + vec2(rnd(), rnd())) / uRes * 2.0 - 1.0;
+        vec3 o = CAM;
+        vec3 d = safeDir(normalize(vec3(uv.x * uTanY * uRes.x / uRes.y, uv.y * uTanY, 1.0)));
+
+        float radiance = 0.0;
+        float throughput = 1.0;
+        bool countEmitters = true;
+        for (int bounce = 0; bounce < 4; bounce++) {
+          Hit h = trace(o, d);
+          if (h.m == M_NONE) break;
+          vec3 p = o + d * h.t;
+
+          float e = emission(h.m, p);
+          if (h.m == M_TUBE) { if (countEmitters) radiance += throughput * e; break; }
+          if (e > 0.0) { radiance += throughput * e; break; }
+
+          float a = albedo(h.m, p);
+          vec3 n = h.n;
+
+          // sealed concrete: a faint, slightly blurry mirror, strongest at grazing angles
+          if (h.m == M_FLOOR) {
+            float fresnel = 0.025 + 0.5 * pow(1.0 - max(0.0, -d.y), 5.0);
+            if (rnd() < fresnel) {
+              vec3 r = reflect(d, n);
+              radiance += throughput * glossyLight(p, n, r);
+              d = safeDir(phongSample(r));
+              if (d.y < 0.0) d.y = -d.y;
+              o = p + n * 2e-3;
+              countEmitters = false;
+              continue;
+            }
+          }
+
+          radiance += throughput * a * directLight(p, n);
+          throughput *= a;
+          d = safeDir(cosineSample(n));
+          o = p + n * 2e-3;
+          countEmitters = false;
+        }
+
+        vec4 prev = texture(uPrev, gl_FragCoord.xy / uRes);
+        outColor = vec4(prev.r + radiance, 0.0, 0.0, 1.0);
+      }
+    </script>
+    <script>
+      const params = new URLSearchParams(location.search)
+      const W = Number(params.get('w') ?? 960)
+      const H = Number(params.get('h') ?? 600)
+      const FOV = Number(params.get('fov') ?? 52)
+      const SPP = Number(params.get('spp') ?? 64)
+
+      function compile(gl, type, source) {
+        const shader = gl.createShader(type)
+        gl.shaderSource(shader, source)
+        gl.compileShader(shader)
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader))
+        return shader
+      }
+
+      function boxBlur(src, w, h, r) {
+        const tmp = new Float32Array(src.length)
+        const out = new Float32Array(src.length)
+        const inv = 1 / (2 * r + 1)
+        for (let y = 0; y < h; y++) {
+          let acc = 0
+          const row = y * w
+          for (let x = -r; x <= r; x++) acc += src[row + Math.min(w - 1, Math.max(0, x))]
+          for (let x = 0; x < w; x++) {
+            tmp[row + x] = acc * inv
+            acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)]
+          }
+        }
+        for (let x = 0; x < w; x++) {
+          let acc = 0
+          for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x]
+          for (let y = 0; y < h; y++) {
+            out[y * w + x] = acc * inv
+            acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]
+          }
+        }
+        return out
+      }
+
+      function blur(src, w, h, r) {
+        return boxBlur(boxBlur(boxBlur(src, w, h, r), w, h, r), w, h, r)
+      }
+
+      async function render() {
+        const canvas = document.getElementById('out')
+        const gl = canvas.getContext('webgl2', { antialias: false })
+        if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('no float render targets')
+        const info = gl.getExtension('WEBGL_debug_renderer_info')
+        const gpu = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown'
+
+        const program = gl.createProgram()
+        gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, document.getElementById('vs').textContent))
+        gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, document.getElementById('fs').textContent))
+        gl.linkProgram(program)
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program))
+        gl.useProgram(program)
+
+        const quad = gl.createBuffer()
+        gl.bindBuffer(gl.ARRAY_BUFFER, quad)
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
+        const aPos = gl.getAttribLocation(program, 'aPos')
+        gl.enableVertexAttribArray(aPos)
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
+
+        const targets = [0, 1].map(() => {
+          const tex = gl.createTexture()
+          gl.bindTexture(gl.TEXTURE_2D, tex)
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, W, H, 0, gl.RGBA, gl.FLOAT, null)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+          const fb = gl.createFramebuffer()
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+          gl.clearColor(0, 0, 0, 1)
+          gl.clear(gl.COLOR_BUFFER_BIT)
+          return { tex, fb }
+        })
+
+        const errors = {}
+        errors.afterSetup = gl.getError()
+        errors.fbStatus = targets.map((t) => {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb)
+          return gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+        })
+        errors.readFormat = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT)
+        errors.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE)
+
+        gl.viewport(0, 0, W, H)
+        gl.uniform2f(gl.getUniformLocation(program, 'uRes'), W, H)
+        gl.uniform1f(gl.getUniformLocation(program, 'uTanY'), Math.tan((FOV * Math.PI) / 360))
+        gl.uniform1i(gl.getUniformLocation(program, 'uPrev'), 0)
+        const uFrame = gl.getUniformLocation(program, 'uFrame')
+
+        // Draw in horizontal bands so no single GPU command runs long enough to trip the
+        // Windows driver watchdog.
+        const BANDS = Math.max(1, Math.ceil((W * H) / 400000))
+        const started = performance.now()
+        let current = 0
+        gl.enable(gl.SCISSOR_TEST)
+        for (let frame = 0; frame < SPP; frame++) {
+          const src = targets[current]
+          const dst = targets[1 - current]
+          gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb)
+          gl.activeTexture(gl.TEXTURE0)
+          gl.bindTexture(gl.TEXTURE_2D, src.tex)
+          gl.uniform1i(uFrame, frame)
+          for (let b = 0; b < BANDS; b++) {
+            const y0 = Math.floor((b * H) / BANDS)
+            const y1 = Math.floor(((b + 1) * H) / BANDS)
+            gl.scissor(0, y0, W, y1 - y0)
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+            gl.finish()
+            if (frame === 0 && b === 0) errors.afterFirstDraw = gl.getError()
+          }
+          current = 1 - current
+          if (frame % 8 === 0) await new Promise((r) => setTimeout(r, 0))
+        }
+        gl.disable(gl.SCISSOR_TEST)
+
+        const raw = new Float32Array(W * H * 4)
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targets[current].fb)
+        errors.beforeRead = gl.getError()
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, raw)
+        errors.afterRead = gl.getError()
+        const glError = errors
+        const renderMs = performance.now() - started
+        let rawSum = 0
+        let rawMax = 0
+        for (let i = 0; i < raw.length; i += 4) {
+          rawSum += raw[i]
+          if (raw[i] > rawMax) rawMax = raw[i]
+        }
+        const stats = { glError, rawMean: rawSum / (W * H), rawMax }
+
+        // ---- film look ----
+        // flip to top-down rows and average the samples
+        const lum = new Float32Array(W * H)
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) lum[(H - 1 - y) * W + x] = raw[(y * W + x) * 4] / SPP
+        }
+
+        // expose so the walls and floor sit in the mid-tones, whatever the light levels
+        const sorted = lum.filter((_, i) => i % 7 === 0).sort()
+        const median = sorted[Math.floor(sorted.length * 0.5)]
+        const exposure = median > 0 ? 0.34 / median : 1
+        stats.median = median
+
+        for (let i = 0; i < lum.length; i++) lum[i] *= exposure
+
+        // Fireflies: a lone pixel far brighter than everything around it is noise, not
+        // detail (real highlights like the tubes are big blobs), so pull it down.
+        const filtered = new Float32Array(lum)
+        for (let y = 1; y < H - 1; y++) {
+          for (let x = 1; x < W - 1; x++) {
+            const i = y * W + x
+            let around = 0
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                if (dx || dy) around = Math.max(around, lum[i + dy * W + dx])
+              }
+            }
+            if (lum[i] > 2 * around + 0.05) filtered[i] = around
+          }
+        }
+        lum.set(filtered)
+
+        const bright = new Float32Array(W * H)
+        for (let i = 0; i < lum.length; i++) bright[i] = Math.min(Math.max(lum[i] - 1.2, 0), 12)
+        const scale = W / 2400
+        const bloomNear = blur(bright, W, H, Math.max(1, Math.round(5 * scale)))
+        const bloomFar = blur(bright, W, H, Math.max(2, Math.round(32 * scale)))
+
+        const out = document.createElement('canvas')
+        out.width = W
+        out.height = H
+        const ctx = out.getContext('2d')
+        const image = ctx.createImageData(W, H)
+        let seed = 12345
+        const random = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const i = y * W + x
+            let v = lum[i] + 0.35 * bloomNear[i] + 0.12 * bloomFar[i]
+            v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14) // ACES-style tone curve
+            v = Math.min(Math.max(v, 0), 1)
+            v = v + 0.45 * (v * v * (3 - 2 * v) - v) // more contrast: inky ceiling, chalky walls
+            v = Math.pow(v, 1 / 2.2)
+            const dx = (x / W) * 2 - 1
+            const dy = (y / H) * 2 - 1
+            v *= 1 - 0.3 * Math.min(1, (dx * dx + dy * dy) / 2) // vignette
+            v += (random() + random() - 1) * 0.03 // grain
+            const byte = Math.round(Math.min(Math.max(v, 0), 1) * 255)
+            const p = i * 4
+            image.data[p] = image.data[p + 1] = image.data[p + 2] = byte
+            image.data[p + 3] = 255
+          }
+        }
+        ctx.putImageData(image, 0, 0)
+        return { gpu, stats, renderMs: Math.round(renderMs), jpeg: out.toDataURL('image/jpeg', 0.84) }
+      }
+
+      window.renderResult = render().catch((error) => ({ error: String(error && error.message ? error.message : error) }))
+    </script>
+  </body>
+</html>

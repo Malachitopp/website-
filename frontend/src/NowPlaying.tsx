@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import SnoopyLedge from './SnoopyLedge'
 
 type NowPlayingData = {
   is_playing: boolean
@@ -14,7 +15,10 @@ function NowPlaying() {
   useEffect(() => {
     const fetchNowPlaying = () => {
       fetch('/api/now-playing')
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) throw new Error(res.statusText)
+          return res.json()
+        })
         .then(setData)
         .catch(() => setData({ is_playing: false }))
     }
@@ -25,24 +29,27 @@ function NowPlaying() {
     return () => clearInterval(interval)
   }, [])
 
-  if (!data) {
-    return <p>Loading...</p>
-  }
-
-  if (!data.is_playing) {
-    return <p>Not listening to anything right now</p>
-  }
-
   return (
     <div className="now-playing">
-      {data.albumArt && <img src={data.albumArt} width={120} alt={`${data.track} album art`} />}
-      <p>
-        <a href={data.songUrl} target="_blank" rel="noreferrer">
-          {data.track}
-        </a>
-        {' — '}
-        {data.artist}
-      </p>
+      {!data && <p>Loading...</p>}
+      {data && !data.is_playing && <p>Not listening to anything right now</p>}
+      {data?.is_playing && (
+        <>
+          {data.albumArt && (
+            <div className="peek-wrapper">
+              <SnoopyLedge />
+              <img src={data.albumArt} width={120} alt={`${data.track} album art`} />
+            </div>
+          )}
+          <p>
+            <a href={data.songUrl} target="_blank" rel="noreferrer">
+              {data.track}
+            </a>
+            {' — '}
+            {data.artist}
+          </p>
+        </>
+      )}
     </div>
   )
 }

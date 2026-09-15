@@ -1,21 +1,20 @@
 import './App.css'
-import NowPlaying from './NowPlaying'
-import TopArtists from './TopArtists'
+import Home from './Home'
+import SpotifyPage from './SpotifyPage'
+import Studio from './Studio'
+import { usePathname } from './router'
 
 function App() {
-  return (
-    <>
-      <section id="center">
-        <h1>Now playing</h1>
-        <NowPlaying />
-        <h1>Top artists</h1>
-        <TopArtists />
-      </section>
+  const pathname = usePathname()
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+  switch (pathname) {
+    case '/studio':
+      return <Studio />
+    case '/spotify':
+      return <SpotifyPage />
+    default:
+      return <Home />
+  }
 }
 
 export default App
