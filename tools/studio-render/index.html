@@ -1,17 +1,23 @@
 <!doctype html>
 <!--
-  Offline renderer for the studio page's warehouse image.
+  Offline renderer for the studio page's warehouse images.
 
   A small WebGL2 path tracer: the warehouse is a big box with procedural surfaces, lit
   only by rows of fluorescent tubes (plus a glowing loading door at the far end). A school
-  blackboard on casters stands mid-hall with the name chalked on it (the writing is drawn
-  on a 2D canvas and sampled as a texture) and broken chalk scattered on the floor. Every
-  frame adds one more light path per pixel; after enough frames the noise settles into
-  something photographic, then a black-and-white film look is applied in JS.
+  blackboard on casters stands mid-hall with a tagline chalked on it (the writing is drawn
+  on a 2D canvas and sampled as a texture) and broken chalk scattered on the floor; the
+  name hangs from the tubes; to the right is the music corner (a record player on a
+  wooden box, a second board the site writes the top artists on, and a candle burning on a
+  crate beside that board). Every frame adds one more light path per pixel; after enough
+  frames the noise settles into something photographic, then a film look is applied in JS.
+  The hall is black and white; the only colour is the candle (its navy glass, and the warm
+  light of its flame, which is kept apart from the tubes' light so post can make it flicker).
 
   Not part of the site. Run `node tools/studio-render/render.mjs` from the repo root to
-  regenerate frontend/src/assets/studio-*.jpg. Query params: w, h, fov (vertical, deg),
-  spp (samples per pixel), row (which row of tubes the name hangs from).
+  regenerate frontend/src/assets/studio-*. It loads this page with query params w, h
+  (pixels), spp (samples per pixel) and row (which row of tubes the name hangs from), waits
+  for window.studio, and then asks it for stills, loop frames and walk frames from
+  whichever camera it wants (see the bottom of the script). Debug params: ?board, ?letters.
 -->
 <html>
   <head>
@@ -32,11 +38,17 @@
       precision highp float;
       precision highp int;
 
-      uniform sampler2D uPrev;
+      uniform sampler2D uPrev; // the sums so far: light from the tubes and the door (rgb), the flame seen directly (a)
+      uniform sampler2D uPrevCandle; // ...and light from the candle (rgb)
       uniform sampler2D uBoard; // chalk on the blackboard, drawn in JS (r: 0 = slate, 1 = chalk)
+      uniform sampler2D uLabel; // the gold printing round the candle's glass (r: 0 = glass, 1 = gold)
+      uniform vec4 uFlame; // the flame's pose: sway in x and z of its tip (m), height scale
       uniform vec2 uRes;
       uniform int uFrame;
       uniform float uTanY;
+      uniform vec3 uCamPos, uCamRight, uCamUp, uCamFwd; // the camera, set per render from JS
+      uniform sampler2D uBoard2; // the music board's slate: just the haze of old wiping (the site writes on it live)
+      uniform float uSpin; // how far the record has turned (rad)
       // the name, hung letter by letter from a row of tubes; laid out in JS (see hangingLetters)
       const int LETTER_N = 11;
       uniform sampler2D uLetters; // signed distance to each letter's outline, in atlas pixels
@@ -47,12 +59,13 @@
       uniform mat3 uLetterRot[LETTER_N]; // letter frame → world: twist on the wire, then pendulum tilt
       uniform vec4 uLetterLegs[LETTER_N]; // a bridle for a letter open at the top (the M): x, y of each leg's end; all 0 when the wire ties straight on
       uniform vec3 uLetterMin, uLetterMax; // box around all the letters and their wires
-      out vec4 outColor;
+      layout(location = 0) out vec4 outBase;
+      layout(location = 1) out vec4 outCandle;
 
       const float PI = 3.14159265;
 
-      // ---- the building (metres). Camera looks down +z from near the front wall. ----
-      const vec3 CAM = vec3(0.0, 1.6, 0.0);
+      // ---- the building (metres). The overview camera stands near the front wall at eye
+      // height, looking down +z. ----
       const float HALF_W = 8.0;
       const float H = 6.4;
       const float FRONT = -3.0;
@@ -102,6 +115,36 @@
       const float WHEEL_R = 0.035;
       const float CHALK_R = 0.006;
 
+      // ---- the music corner, to the right of that board ----
+      // A little wooden box standing 50 cm to the right of the board and 50 cm in front of
+      // it, turned to face the room at a diagonal, with a record player on top; and behind
+      // it, off to the right so the player does not hide it, a second board of the same kind.
+      // The site writes the top artists on that one live, over the render, so its slate only
+      // carries old wipe marks (uBoard2).
+      const vec3 BOARD2_POS = vec3(3.25, 0.0, 12.55);
+      const float BOARD2_C = 0.93969262;
+      const float BOARD2_S = 0.34202014; // 20°
+      const vec3 TABLE_POS = vec3(1.81, 0.0, 10.98);
+      const float TABLE_C = 0.8660254;
+      const float TABLE_S = 0.5; // 30°
+
+      // ---- the candle, on a crate of its own on the right of the music board ----
+      // A Carby Musk candle (Better World Fragrance House): a navy glass tumbler with its name
+      // printed in gold, burning. Its crate is stood on end just in front of the board's right
+      // leg, squared up with the board (it shares the board's yaw), at (1.30, -0.50) in the
+      // board's frame. Its light is warm and kept in a channel of its own (see main).
+      const vec3 CANDLE_TABLE_POS = vec3(4.3006, 0.0, 11.6355);
+      const float CRATE_HW = 0.17, CRATE_HD = 0.15, CRATE_H = 0.66, SHELF_Y = 0.3; // half width, half depth, height, the shelf's underside
+      const vec2 CANDLE_C = vec2(-0.03, -0.02); // where the jar stands on top (x, z in the crate's frame)
+      const float JAR_R = 0.041, JAR_H = 0.11, JAR_T = 0.003, JAR_BASE = 0.016; // outer radius, height, wall, solid glass base
+      const float WAX_Y = 0.104; // the wax's surface, up from the bottom of the jar: a new candle, so the flame clears the rim
+      const float FLAME_Y = 0.107, FLAME_H = 0.026, FLAME_R = 0.0052; // where the flame starts, how tall and wide it is
+      const float FLAME_LE = 6000.0; // the flame's glow per metre of it a ray passes through
+      const float LABEL_FACING = -1.63; // the angle round the jar (atan(z, x), crate frame) the printing faces: the close-ups
+      const vec3 CANDLE_RGB = vec3(1.0, 0.76, 0.42); // warm yellow
+      const float CANDLE_SOFT = 0.7; // m: softens the fall-off of its light close to it
+      const float CANDLE_REACH = 9.0; // m: beyond this the candle adds nothing that can be seen
+
       // broken chalk on the floor around it: x, z, yaw (rad), length — in the board frame
       const int CHALK_N = 27;
       const vec4 CHALK[CHALK_N] = vec4[CHALK_N](
@@ -124,13 +167,25 @@
       const int M_NONE = 0, M_FLOOR = 1, M_CEIL = 2, M_LEFT = 3, M_RIGHT = 4, M_BACK = 5,
         M_FRONT = 6, M_STUD = 7, M_BEAM = 8, M_TUBE = 9, M_PIPE = 10, M_PLATE = 11,
         M_BOARD = 12, M_FRAME = 13, M_STAND = 14, M_WHEEL = 15, M_CHALK = 16, M_ERASER = 17,
-        M_LETTER = 18, M_WIRE = 19;
+        M_LETTER = 18, M_WIRE = 19, M_BOARD2 = 20, M_WOOD = 21, M_SLEEVE = 22, M_PLINTH = 23,
+        M_PLATTER = 24, M_RECORD = 25, M_METAL = 26, M_RUBBER = 27, M_GLASS = 28, M_WAX = 29,
+        M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32;
 
       struct Hit { float t; vec3 n; int m; };
 
-      vec3 boardLocal(vec3 p) { p -= BOARD_POS; return vec3(BOARD_C * p.x - BOARD_S * p.z, p.y, BOARD_S * p.x + BOARD_C * p.z); }
-      vec3 boardLocalDir(vec3 d) { return vec3(BOARD_C * d.x - BOARD_S * d.z, d.y, BOARD_S * d.x + BOARD_C * d.z); }
-      vec3 boardWorldDir(vec3 d) { return vec3(BOARD_C * d.x + BOARD_S * d.z, d.y, -BOARD_S * d.x + BOARD_C * d.z); }
+      // Frames turned about y (cos c, sin s of the yaw) with their origin at pos: the boards and the box
+      vec3 yawLocal(vec3 p, vec3 pos, float c, float s) { p -= pos; return vec3(c * p.x - s * p.z, p.y, s * p.x + c * p.z); }
+      vec3 yawLocalDir(vec3 d, float c, float s) { return vec3(c * d.x - s * d.z, d.y, s * d.x + c * d.z); }
+      vec3 yawWorldDir(vec3 d, float c, float s) { return vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z); }
+      vec3 boardLocal(vec3 p) { return yawLocal(p, BOARD_POS, BOARD_C, BOARD_S); }
+      vec3 board2Local(vec3 p) { return yawLocal(p, BOARD2_POS, BOARD2_C, BOARD2_S); }
+      vec3 tableLocal(vec3 p) { return yawLocal(p, TABLE_POS, TABLE_C, TABLE_S); }
+      vec3 crateLocal(vec3 p) { return yawLocal(p, CANDLE_TABLE_POS, BOARD2_C, BOARD2_S); }
+      // the candle's jar: origin under the middle of its base
+      vec3 jarLocal(vec3 p) { return crateLocal(p) - vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y); }
+      vec3 jarWorld(vec3 q) { q += vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y); return CANDLE_TABLE_POS + yawWorldDir(q, BOARD2_C, BOARD2_S); }
+      // a point on one of the boards' shared parts (rail, tray, stand), in that board's frame
+      vec3 nearestBoardLocal(vec3 p) { return distance(p.xz, BOARD_POS.xz) < distance(p.xz, BOARD2_POS.xz) ? boardLocal(p) : board2Local(p); }
 
       // ---- random numbers & noise ----
       uint rngState;
@@ -245,16 +300,18 @@
         h.t = t; h.n = n; h.m = m;
       }
 
-      // The blackboard and everything dropped around it. Rays are moved into the board's
-      // frame first, so the parts can all be axis-aligned boxes; one bounding box keeps the
-      // cost away from rays that never come near it.
-      void blackboard(vec3 wo, vec3 wd, inout Hit h) {
-        vec3 o = boardLocal(wo), d = boardLocalDir(wd);
+      // A blackboard (at pos, turned by the yaw with cosine c and sine s) and, if litter is
+      // set, the broken chalk dropped around it. Rays are moved into the board's frame first,
+      // so the parts can all be axis-aligned boxes; one bounding box keeps the cost away from
+      // rays that never come near it. slate is the material of the writing surface, which
+      // decides which chalk texture it shows.
+      void blackboard(vec3 wo, vec3 wd, vec3 pos, float c, float s, int slate, bool litter, inout Hit h) {
+        vec3 o = yawLocal(wo, pos, c, s), d = yawLocalDir(wd, c, s);
         float tn, tf; vec3 n;
-        if (!slab(o, d, vec3(-1.6, 0.0, -2.5), vec3(1.5, 2.0, 0.5), tn, tf, n) || tn >= h.t) return;
+        if (!slab(o, d, litter ? vec3(-1.6, 0.0, -2.5) : vec3(-1.2, 0.0, -0.35), litter ? vec3(1.5, 2.0, 0.5) : vec3(1.2, 2.0, 0.35), tn, tf, n) || tn >= h.t) return;
         Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
         // slate in its rail, the chalk tray along the bottom, and what's been left on it
-        box(o, d, vec3(-BOARD_HALF_W - RAIL, BOARD_Y0 - RAIL, -0.015), vec3(BOARD_HALF_W + RAIL, BOARD_Y0 + BOARD_H + RAIL, 0.015), M_BOARD, l);
+        box(o, d, vec3(-BOARD_HALF_W - RAIL, BOARD_Y0 - RAIL, -0.015), vec3(BOARD_HALF_W + RAIL, BOARD_Y0 + BOARD_H + RAIL, 0.015), slate, l);
         box(o, d, vec3(-0.9, 0.83, -0.09), vec3(0.9, 0.85, -0.015), M_FRAME, l);
         box(o, d, vec3(-0.9, 0.83, -0.09), vec3(0.9, 0.87, -0.078), M_FRAME, l);
         box(o, d, vec3(0.30, 0.85, -0.08), vec3(0.43, 0.885, -0.03), M_ERASER, l);
@@ -276,15 +333,183 @@
         }
         box(o, d, vec3(-POST_X, 0.28, -0.02), vec3(POST_X, 0.32, 0.02), M_STAND, l);
         // broken chalk on the floor
-        if (slab(o, d, vec3(-1.5, 0.0, -2.45), vec3(1.4, 2.0 * CHALK_R, 0.4), tn, tf, n) && tn < l.t) {
+        if (litter && slab(o, d, vec3(-1.5, 0.0, -2.45), vec3(1.4, 2.0 * CHALK_R, 0.4), tn, tf, n) && tn < l.t) {
           for (int i = 0; i < CHALK_N; i++) {
-            vec4 c = CHALK[i];
-            vec3 arm = vec3(cos(c.z), 0.0, sin(c.z)) * (0.5 * c.w);
-            vec3 mid = vec3(c.x, CHALK_R, c.y);
+            vec4 piece = CHALK[i];
+            vec3 arm = vec3(cos(piece.z), 0.0, sin(piece.z)) * (0.5 * piece.w);
+            vec3 mid = vec3(piece.x, CHALK_R, piece.y);
             cylinder(o, d, mid - arm, mid + arm, CHALK_R, M_CHALK, l);
           }
         }
-        if (l.t < h.t) { h.t = l.t; h.n = boardWorldDir(l.n); h.m = l.m; }
+        if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, c, s); h.m = l.m; }
+      }
+
+      // The record player on its box, all in the box's frame: origin in the middle of its
+      // footprint on the floor, the open side of the box and the front of the player at -z.
+      // The box is a plywood crate on its side with records filed spine-out inside; the
+      // player is a plinth on four feet, a platter with a record (turned by uSpin) and a
+      // tonearm resting in the grooves.
+      const float BOX_HW = 0.26, BOX_HD = 0.21, BOX_H = 0.5, BOX_T = 0.018; // half width, half depth, height, plank
+      const float PLINTH_Y0 = 0.52, PLINTH_Y1 = 0.6;
+      const vec2 REC_C = vec2(-0.04, 0.0); // centre of the record (x, z)
+      const float REC_R = 0.1505, REC_Y = 0.628, LABEL_R = 0.05;
+      const vec3 ARM_PIVOT = vec3(0.17, 0.66, 0.11);
+      const vec3 ARM_HEAD = vec3(-0.015, 0.646, -0.085);
+      const float SLEEVE_LEAN = 0.42; // rad, the last record in the box leans over
+
+      void musicTable(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = tableLocal(wo), d = yawLocalDir(wd, TABLE_C, TABLE_S);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-0.3, 0.0, -0.25), vec3(0.3, 0.7, 0.25), tn, tf, n) || tn >= h.t) return;
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        // the crate: top, bottom, sides and back; open to the front
+        box(o, d, vec3(-BOX_HW, BOX_H - BOX_T, -BOX_HD), vec3(BOX_HW, BOX_H, BOX_HD), M_WOOD, l);
+        box(o, d, vec3(-BOX_HW, 0.0, -BOX_HD), vec3(BOX_HW, BOX_T, BOX_HD), M_WOOD, l);
+        box(o, d, vec3(-BOX_HW, BOX_T, -BOX_HD), vec3(-BOX_HW + BOX_T, BOX_H - BOX_T, BOX_HD), M_WOOD, l);
+        box(o, d, vec3(BOX_HW - BOX_T, BOX_T, -BOX_HD), vec3(BOX_HW, BOX_H - BOX_T, BOX_HD), M_WOOD, l);
+        box(o, d, vec3(-BOX_HW + BOX_T, BOX_T, BOX_HD - BOX_T), vec3(BOX_HW - BOX_T, BOX_H - BOX_T, BOX_HD), M_WOOD, l);
+        // records filed inside (one block, the spines drawn in albedo), the last one leaning over
+        box(o, d, vec3(-BOX_HW + BOX_T, BOX_T, -BOX_HD + 0.07), vec3(0.05, BOX_T + 0.316, BOX_HD - BOX_T), M_SLEEVE, l);
+        {
+          vec3 pivot = vec3(0.052, BOX_T, 0.0);
+          float cs = cos(SLEEVE_LEAN), sn = sin(SLEEVE_LEAN);
+          vec3 ro = o - pivot, rd = d;
+          ro.xy = vec2(cs * ro.x - sn * ro.y, sn * ro.x + cs * ro.y); // into the leaning sleeve's frame
+          rd.xy = vec2(cs * rd.x - sn * rd.y, sn * rd.x + cs * rd.y);
+          Hit s; s.t = l.t; s.m = M_NONE; s.n = vec3(0);
+          box(ro, rd, vec3(0.0, 0.0, -BOX_HD + 0.075), vec3(0.004, 0.316, BOX_HD - BOX_T - 0.005), M_SLEEVE, s);
+          if (s.t < l.t) { l.t = s.t; l.m = s.m; l.n = vec3(cs * s.n.x + sn * s.n.y, -sn * s.n.x + cs * s.n.y, s.n.z); }
+        }
+        // the player
+        for (int i = 0; i < 4; i++) {
+          vec2 f = vec2(i < 2 ? -0.19 : 0.19, i % 2 == 0 ? -0.14 : 0.14);
+          cylinder(o, d, vec3(f.x, BOX_H, f.y), vec3(f.x, PLINTH_Y0, f.y), 0.024, M_RUBBER, l);
+        }
+        box(o, d, vec3(-0.225, PLINTH_Y0, -0.175), vec3(0.225, PLINTH_Y1, 0.175), M_PLINTH, l);
+        cylinder(o, d, vec3(REC_C.x, PLINTH_Y1, REC_C.y), vec3(REC_C.x, 0.625, REC_C.y), 0.148, M_PLATTER, l);
+        cylinder(o, d, vec3(REC_C.x, 0.624, REC_C.y), vec3(REC_C.x, REC_Y, REC_C.y), REC_R, M_RECORD, l);
+        cylinder(o, d, vec3(REC_C.x, REC_Y - 0.001, REC_C.y), vec3(REC_C.x, REC_Y + 0.013, REC_C.y), 0.0035, M_METAL, l);
+        // tonearm: its base, the tube, the counterweight behind the pivot, the headshell and
+        // the cartridge down in the grooves, and an empty arm rest
+        vec3 along = normalize(ARM_HEAD - ARM_PIVOT);
+        cylinder(o, d, vec3(ARM_PIVOT.x, PLINTH_Y1, ARM_PIVOT.z), vec3(ARM_PIVOT.x, ARM_PIVOT.y + 0.006, ARM_PIVOT.z), 0.026, M_METAL, l);
+        cylinder(o, d, ARM_PIVOT, ARM_HEAD, 0.0045, M_METAL, l);
+        cylinder(o, d, ARM_PIVOT - along * 0.03, ARM_PIVOT - along * 0.068, 0.018, M_METAL, l);
+        cylinder(o, d, ARM_HEAD - along * 0.004, ARM_HEAD + along * 0.03, 0.009, M_METAL, l);
+        vec3 stylus = ARM_HEAD + along * 0.018;
+        cylinder(o, d, vec3(stylus.x, REC_Y + 0.002, stylus.z), vec3(stylus.x, ARM_HEAD.y, stylus.z), 0.007, M_PLINTH, l);
+        cylinder(o, d, vec3(0.2, PLINTH_Y1, -0.07), vec3(0.2, 0.642, -0.07), 0.005, M_METAL, l);
+        // start button and speed selector at the front left
+        cylinder(o, d, vec3(-0.19, PLINTH_Y1, -0.145), vec3(-0.19, PLINTH_Y1 + 0.007, -0.145), 0.014, M_METAL, l);
+        cylinder(o, d, vec3(-0.15, PLINTH_Y1, -0.15), vec3(-0.15, PLINTH_Y1 + 0.005, -0.15), 0.008, M_METAL, l);
+        if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, TABLE_C, TABLE_S); h.m = l.m; }
+      }
+
+      // the top of the record outside its label: vinyl, which gets a glossy reflection
+      bool vinyl(vec3 p, vec3 n) {
+        if (n.y < 0.5) return false;
+        vec3 q = tableLocal(p);
+        return q.y > REC_Y - 5e-4 && length(q.xz - REC_C) > LABEL_R;
+      }
+
+      // The candle's tumbler, in the jar's frame: a glass cylinder open at the top with wax
+      // inside up to WAX_Y. The navy glass is treated as opaque (too dark to see into), so only
+      // what shows from outside is modelled: the outer wall, the rim, and through the opening
+      // the inside of the wall above the wax, and the wax.
+      void jar(vec3 o, vec3 d, inout Hit h) {
+        float a = dot(d.xz, d.xz);
+        float ri = JAR_R - JAR_T;
+        if (a > 1e-12) {
+          float b = dot(o.xz, d.xz);
+          float disc = b * b - a * (dot(o.xz, o.xz) - JAR_R * JAR_R);
+          if (disc < 0.0) return; // nowhere near it
+          float t = (-b - sqrt(disc)) / a; // the outer wall, from outside
+          float y = o.y + d.y * t;
+          if (t > 1e-4 && t < h.t && y > 0.0 && y < JAR_H) { h.t = t; h.n = vec3((o.xz + d.xz * t) / JAR_R, 0.0).xzy; h.m = M_GLASS; }
+          disc = b * b - a * (dot(o.xz, o.xz) - ri * ri);
+          if (disc > 0.0) {
+            t = (-b + sqrt(disc)) / a; // the inner wall, from inside (anything else would have met the outer wall first)
+            y = o.y + d.y * t;
+            if (t > 1e-4 && t < h.t && y > WAX_Y && y < JAR_H) { h.t = t; h.n = -vec3((o.xz + d.xz * t) / ri, 0.0).xzy; h.m = M_GLASS; }
+          }
+        }
+        if (d.y < 0.0) {
+          float t = (JAR_H - o.y) / d.y; // the rim
+          vec2 q = o.xz + d.xz * t;
+          float r2 = dot(q, q);
+          if (t > 1e-4 && t < h.t && r2 < JAR_R * JAR_R && r2 > ri * ri) { h.t = t; h.n = vec3(0, 1, 0); h.m = M_GLASS; }
+          t = (WAX_Y - o.y) / d.y; // the wax
+          q = o.xz + d.xz * t;
+          if (t > 1e-4 && t < h.t && dot(q, q) < ri * ri) { h.t = t; h.n = vec3(0, 1, 0); h.m = M_WAX; }
+        }
+      }
+
+      // The crate the candle stands on, in its frame (origin in the middle of its footprint,
+      // open side at -z): a plywood crate like the record player's, stood on end, with a shelf
+      // and a few books lying in the bottom; on top the jar, a box of matches and a spent match.
+      void candleTable(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = crateLocal(wo), d = yawLocalDir(wd, BOARD2_C, BOARD2_S);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-CRATE_HW - 0.01, 0.0, -CRATE_HD - 0.01), vec3(CRATE_HW + 0.01, CRATE_H + JAR_H + 0.04, CRATE_HD + 0.01), tn, tf, n) || tn >= h.t) return;
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        box(o, d, vec3(-CRATE_HW, CRATE_H - BOX_T, -CRATE_HD), vec3(CRATE_HW, CRATE_H, CRATE_HD), M_WOOD, l);
+        box(o, d, vec3(-CRATE_HW, 0.0, -CRATE_HD), vec3(CRATE_HW, BOX_T, CRATE_HD), M_WOOD, l);
+        box(o, d, vec3(-CRATE_HW, BOX_T, -CRATE_HD), vec3(-CRATE_HW + BOX_T, CRATE_H - BOX_T, CRATE_HD), M_WOOD, l);
+        box(o, d, vec3(CRATE_HW - BOX_T, BOX_T, -CRATE_HD), vec3(CRATE_HW, CRATE_H - BOX_T, CRATE_HD), M_WOOD, l);
+        box(o, d, vec3(-CRATE_HW + BOX_T, BOX_T, CRATE_HD - BOX_T), vec3(CRATE_HW - BOX_T, CRATE_H - BOX_T, CRATE_HD), M_WOOD, l);
+        box(o, d, vec3(-CRATE_HW + BOX_T, SHELF_Y, -CRATE_HD + 0.01), vec3(CRATE_HW - BOX_T, SHELF_Y + BOX_T, CRATE_HD - BOX_T), M_WOOD, l);
+        // books lying flat on the bottom, spines out, not quite squared up
+        box(o, d, vec3(-0.135, BOX_T, -0.125), vec3(0.12, BOX_T + 0.034, 0.11), M_BOOK, l);
+        box(o, d, vec3(-0.125, BOX_T + 0.034, -0.118), vec3(0.105, BOX_T + 0.058, 0.1), M_BOOK, l);
+        box(o, d, vec3(-0.14, BOX_T + 0.058, -0.13), vec3(0.128, BOX_T + 0.079, 0.115), M_BOOK, l);
+        // on top: the jar, a box of matches (turned a little) and a spent match
+        {
+          vec3 jo = o - vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y);
+          Hit j; j.t = l.t; j.m = M_NONE; j.n = vec3(0);
+          jar(jo, d, j);
+          cylinder(jo, d, vec3(0.0, WAX_Y - 0.002, 0.0), vec3(0.0006, FLAME_Y + 0.002, 0.0003), 0.0009, M_RUBBER, j); // the wick, charred black
+          if (j.t < l.t) l = j;
+        }
+        {
+          vec3 pivot = vec3(0.095, CRATE_H, 0.06);
+          float cs = cos(0.42), sn = sin(0.42);
+          vec3 ro = o - pivot, rd = d;
+          ro.xz = vec2(cs * ro.x - sn * ro.z, sn * ro.x + cs * ro.z);
+          rd.xz = vec2(cs * rd.x - sn * rd.z, sn * rd.x + cs * rd.z);
+          Hit s; s.t = l.t; s.m = M_NONE; s.n = vec3(0);
+          box(ro, rd, vec3(-0.027, 0.0, -0.018), vec3(0.027, 0.014, 0.018), M_MATCHBOX, s);
+          if (s.t < l.t) { l.t = s.t; l.m = s.m; l.n = vec3(cs * s.n.x + sn * s.n.z, s.n.y, -sn * s.n.x + cs * s.n.z); }
+        }
+        cylinder(o, d, vec3(0.03, CRATE_H + 0.0012, -0.075), vec3(0.074, CRATE_H + 0.0012, -0.09), 0.0012, M_MATCH, l);
+        if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, BOARD2_C, BOARD2_S); h.m = l.m; }
+      }
+
+      // The flame, seen directly: not a surface but a glowing teardrop the ray passes through,
+      // summed along the part of the ray in front of tMax (whatever the ray hits). Widest a third
+      // of the way up, pointed at the tip, dim at the root where a real flame burns blue; its tip
+      // sways and it stretches with uFlame.
+      float flameGlow(vec3 wo, vec3 wd, float tMax) {
+        vec3 o = jarLocal(wo) - vec3(0.0, FLAME_Y, 0.0), d = yawLocalDir(wd, BOARD2_C, BOARD2_S);
+        float height = FLAME_H * uFlame.z;
+        float reach = FLAME_R + max(abs(uFlame.x), abs(uFlame.y));
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-reach, 0.0, -reach), vec3(reach, height, reach), tn, tf, n)) return 0.0;
+        tn = max(tn, 0.0);
+        tf = min(tf, tMax);
+        if (tf <= tn) return 0.0;
+        const int STEPS = 14;
+        float dt = (tf - tn) / float(STEPS);
+        float sum = 0.0;
+        for (int i = 0; i < STEPS; i++) {
+          vec3 p = o + d * (tn + (float(i) + 0.5) * dt);
+          float s = p.y / height;
+          vec2 axis = uFlame.xy * s * s;
+          float radius = FLAME_R * sqrt(max(s, 0.0)) * pow(max(1.0 - s, 0.0), 0.8) / 0.42;
+          float q = length(p.xz - axis) / max(radius, 1e-5);
+          float core = pow(clamp(1.0 - q, 0.0, 1.0), 0.7);
+          sum += core * smoothstep(0.0, 0.2, s) * (0.55 + 0.45 * (1.0 - s));
+        }
+        return sum * dt * FLAME_LE;
       }
 
       // The name: letters cut from thick card, each hung by a wire from a tube. A letter is
@@ -366,7 +591,10 @@
         box(o, d, vec3(-HALF_W, 0.0, PIPE_Z1 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z1 + 0.045), M_PIPE, h);
         box(o, d, vec3(-HALF_W, 0.0, PIPE_Z2 - 0.045), vec3(-HALF_W + 0.09, H, PIPE_Z2 + 0.045), M_PIPE, h);
         tubes(o, d, h);
-        blackboard(o, d, h);
+        blackboard(o, d, BOARD_POS, BOARD_C, BOARD_S, M_BOARD, true, h);
+        blackboard(o, d, BOARD2_POS, BOARD2_C, BOARD2_S, M_BOARD2, false, h);
+        musicTable(o, d, h);
+        candleTable(o, d, h);
         letters(o, d, h);
         return h;
       }
@@ -406,31 +634,111 @@
           if (abs(q.x) < 1.6 && q.z > -2.6 && q.z < 0.6) a = mix(a, 0.9, chalkDust(q.xz));
           return a;
         }
-        if (m == M_BOARD) {
-          vec3 q = boardLocal(p);
+        if (m == M_BOARD || m == M_BOARD2) {
+          vec3 q = m == M_BOARD ? boardLocal(p) : board2Local(p);
           if (abs(q.x) > BOARD_HALF_W || q.y < BOARD_Y0 || q.y > BOARD_Y0 + BOARD_H)
             return 0.62 + 0.05 * (noise(q.xy * 30.0) - 0.5); // the rail
           if (q.z > 0.0) return 0.07; // the back
           vec2 uv = vec2((q.x + BOARD_HALF_W) / (2.0 * BOARD_HALF_W), 1.0 - (q.y - BOARD_Y0) / BOARD_H);
-          float chalk = textureLod(uBoard, uv, 0.0).r;
-          float slate = 0.075 + 0.03 * (fbm(q.xy * 2.5 + 9.0) - 0.5);
+          float chalk = m == M_BOARD ? textureLod(uBoard, uv, 0.0).r : textureLod(uBoard2, uv, 0.0).r;
+          float slate = 0.075 + 0.03 * (fbm(q.xy * 2.5 + (m == M_BOARD ? 9.0 : 41.0)) - 0.5);
           return mix(slate, 0.9, chalk);
         }
         if (m == M_FRAME) {
-          vec3 q = boardLocal(p);
+          vec3 q = nearestBoardLocal(p);
           float a = 0.6 + 0.04 * (noise(q.xz * 60.0) - 0.5);
           if (q.y > 0.849) a = mix(a, 0.85, 0.5 * smoothstep(0.45, 0.75, fbm(q.xz * 40.0))); // dust in the tray
           return a;
         }
         if (m == M_STAND) return 0.3;
         if (m == M_WHEEL) {
-          vec3 q = boardLocal(p);
+          vec3 q = nearestBoardLocal(p);
           return length(vec2(q.y - WHEEL_R, abs(q.z) - 0.27)) < 0.018 ? 0.45 : 0.05; // hub vs rubber
         }
         if (m == M_CHALK) return 0.9 + 0.06 * (noise(p.xz * 400.0) - 0.5);
         if (m == M_ERASER) return 0.42;
         if (m == M_LETTER) return 0.86 + 0.03 * (noise(p.xy * 90.0) - 0.5);
         if (m == M_WIRE) return 0.75;
+        if (m == M_WOOD) {
+          // pine boards: grain running along each board, two boards to a panel, darker end grain on
+          // the edges. Two crates are made of it: the record player's and the candle's (stood on
+          // end, with a shelf).
+          bool candle = distance(p.xz, CANDLE_TABLE_POS.xz) < distance(p.xz, TABLE_POS.xz);
+          vec3 q = candle ? crateLocal(p) : tableLocal(p);
+          vec3 size = candle ? vec3(CRATE_HW, CRATE_H, CRATE_HD) : vec3(BOX_HW, BOX_H, BOX_HD); // half width, height, half depth
+          bool shelf = candle && q.y > SHELF_Y - 1e-3 && q.y < SHELF_Y + BOX_T + 1e-3 && abs(q.x) < size.x - BOX_T + 1e-3;
+          bool lying = shelf || q.y > size.y - BOX_T - 1e-3 || q.y < BOX_T + 1e-3; // top or bottom
+          bool side = !lying && abs(q.x) > size.x - BOX_T - 1e-3;
+          vec2 g = (lying ? q.xz : side ? q.zy : q.xy) + (candle ? 13.0 : 0.0); // along the board, across it
+          float a = 0.47 + 0.17 * (fbm(vec2(g.x * 2.5, g.y * 38.0 + fbm(g * 6.0) * 2.0)) - 0.5);
+          a += 0.07 * (noise(vec2(g.x * 5.0, g.y * 160.0)) - 0.5);
+          a *= 1.0 - 0.45 * edgeLine((lying ? q.z : q.y - 0.5 * size.y), 0.0025); // the joint between the two boards
+          float inset = min(min(size.x - abs(q.x), size.z - abs(q.z)), min(q.y, size.y - q.y));
+          if (shelf) inset = min(size.z - abs(q.z), min(q.y - SHELF_Y, SHELF_Y + BOX_T - q.y));
+          a *= 1.0 - 0.3 * (1.0 - smoothstep(0.0, 0.004, inset));
+          return a;
+        }
+        if (m == M_BOOK) {
+          // three hardbacks lying flat, spines out: dark cloth, a paler one, a mid one, with the
+          // page edges showing pale between the boards at the ends
+          vec3 q = crateLocal(p);
+          float y = q.y - BOX_T;
+          float lo = y < 0.034 ? 0.0 : y < 0.058 ? 0.034 : 0.058, hi = y < 0.034 ? 0.034 : y < 0.058 ? 0.058 : 0.079;
+          float cloth = y < 0.034 ? 0.12 : y < 0.058 ? 0.55 : 0.3;
+          bool pageEdge = abs(q.x) > 0.1 && min(y - lo, hi - y) > 0.003;
+          return (pageEdge ? 0.8 : cloth) + 0.03 * (noise(q.xz * 300.0 + y * 90.0) - 0.5);
+        }
+        if (m == M_MATCHBOX) {
+          vec3 q = crateLocal(p);
+          return q.y > CRATE_H + 0.0135 ? 0.72 + 0.04 * (noise(q.xz * 500.0) - 0.5) : 0.16; // printed paper top, brown striking sides
+        }
+        if (m == M_MATCH) {
+          vec3 q = crateLocal(p);
+          return length(q.xz - vec2(0.074, -0.09)) < 0.006 ? 0.04 : 0.62; // burnt head
+        }
+        if (m == M_WAX) return 0.86;
+        if (m == M_SLEEVE) {
+          // spines of different records, some thicker than others
+          vec3 q = tableLocal(p);
+          float u = (q.x + 1.0) * 170.0 + 0.8 * sin(q.x * 41.0) + 0.5 * sin(q.x * 97.0);
+          float id = floor(u);
+          float a = 0.22 + 0.42 * hash2(vec2(id, 7.0));
+          a *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.08, min(fract(u), 1.0 - fract(u)))); // the gap between sleeves
+          a -= 0.06 * smoothstep(0.3, 0.9, fbm(q.zy * 30.0 + id));
+          return clamp(a, 0.04, 0.8);
+        }
+        if (m == M_PLINTH) return 0.08 + 0.02 * (noise(p.xz * 80.0) - 0.5);
+        if (m == M_PLATTER) {
+          // aluminium, with a ring of strobe dots round the rim that turn with it
+          vec3 q = tableLocal(p);
+          vec2 v = q.xz - REC_C;
+          if (length(v) < 0.146) return 0.55;
+          float a = atan(v.y, v.x) + uSpin;
+          return q.y > 0.607 && q.y < 0.618 ? mix(0.22, 0.7, step(0.5, fract(a * 36.0 / PI))) : 0.6;
+        }
+        if (m == M_RECORD) {
+          vec3 q = tableLocal(p);
+          if (q.y < REC_Y - 5e-4) return 0.05; // the edge
+          vec2 v = q.xz - REC_C;
+          float r = length(v);
+          // turning clockwise seen from above: the pattern that is at angle a now started at a + uSpin
+          float a = atan(v.y, v.x) + uSpin;
+          if (r < LABEL_R) {
+            // a paper label printed off-centre, so the turning shows even from across the hall
+            vec2 u = vec2(cos(a), sin(a)) * r;
+            float lab = u.x > 0.0 && r < 0.042 ? 0.36 : 0.8;
+            lab -= 0.45 * edgeLine(r - 0.045, 0.0012);
+            lab -= 0.5 * step(abs(u.y - 0.012), 0.004) * step(abs(u.x + 0.02), 0.014);
+            lab -= 0.35 * step(abs(u.y + 0.014), 0.0025) * step(abs(u.x + 0.018), 0.012);
+            lab -= 0.35 * step(r, 0.0045);
+            return lab;
+          }
+          float g = 0.035 + 0.012 * (noise(vec2(r * 2600.0, 0.5)) - 0.5);
+          g += 0.035 * (edgeLine(r - 0.086, 0.0011) + edgeLine(r - 0.109, 0.0011) + edgeLine(r - 0.131, 0.0011)); // gaps between tracks
+          return r > 0.147 ? 0.05 : g;
+        }
+        if (m == M_METAL) return 0.62;
+        if (m == M_RUBBER) return 0.05;
         if (m == M_LEFT) {
           vec2 q = vec2(p.z, p.y);
           float a = 0.84;
@@ -464,6 +772,32 @@
           return a;
         }
         return 0.5;
+      }
+
+      // A surface's colour. Everything in the hall is grey; the candle's jar is navy glass with its
+      // printing in gold, and its wax is cream.
+      vec3 surface(int m, vec3 p, vec3 n) {
+        if (m == M_WAX) return vec3(0.87, 0.84, 0.77);
+        if (m != M_GLASS) return vec3(albedo(m, p));
+        vec3 q = jarLocal(p);
+        if (n.y > 0.5) return vec3(0.12, 0.16, 0.3); // the rim
+        if (dot(n.xz, q.xz) < 0.0) return vec3(0.03, 0.05, 0.13); // the inside of the wall, above the wax
+        if (q.y < JAR_BASE) return vec3(0.1, 0.12, 0.18); // the thick clear base
+        vec2 uv = vec2(fract((atan(q.z, q.x) - LABEL_FACING) / (2.0 * PI) + 0.5), 1.0 - q.y / JAR_H);
+        float gold = textureLod(uLabel, uv, 0.0).r;
+        return mix(vec3(0.018, 0.032, 0.095), vec3(0.8, 0.6, 0.28), gold);
+      }
+
+      // Candlelight coming through the glass: the wall above the wax glows with the flame behind
+      // it, and below that the wax lets some through near the top. The gold ink blocks it.
+      vec3 jarGlow(vec3 p, vec3 n) {
+        vec3 q = jarLocal(p);
+        if (n.y > 0.5 || dot(n.xz, q.xz) < 0.0) return vec3(0.0); // rim and inside are lit by the flame directly
+        vec3 blue = vec3(0.22, 0.4, 1.0);
+        if (q.y > WAX_Y) return 0.014 * blue;
+        if (q.y < JAR_BASE) return 0.001 * CANDLE_RGB;
+        vec2 uv = vec2(fract((atan(q.z, q.x) - LABEL_FACING) / (2.0 * PI) + 0.5), 1.0 - q.y / JAR_H);
+        return 0.006 * exp(-(WAX_Y - q.y) / 0.02) * (1.0 - textureLod(uLabel, uv, 0.0).r) * blue;
       }
 
       float emission(int m, vec3 p) {
@@ -557,6 +891,42 @@
         return TUBE_LE * f * cosS * cosL * TUBE_AREA / (dist2 * (w / total));
       }
 
+      // The candle as a light: a point in the bright middle of its flame, at rest (the flicker is
+      // applied in post, so the light doesn't move in the loops). A candle wouldn't show at all
+      // against these tubes, so it is far stronger than a real one (set in post), and its fall-off
+      // is softened close to it so the board beside it isn't burnt out.
+      vec3 flamePoint() {
+        return jarWorld(vec3((rnd() * 2.0 - 1.0) * 0.002, FLAME_Y + FLAME_H * (0.2 + 0.45 * rnd()), (rnd() * 2.0 - 1.0) * 0.002));
+      }
+
+      float candleLight(vec3 p, vec3 n) {
+        vec3 v = flamePoint() - p;
+        float dist2 = dot(v, v);
+        if (dist2 > CANDLE_REACH * CANDLE_REACH) return 0.0;
+        float dist = sqrt(dist2);
+        vec3 dir = v / dist;
+        float cosS = dot(n, dir);
+        if (cosS <= 0.0) return 0.0;
+        if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
+        float fade = 1.0 - smoothstep(0.6 * CANDLE_REACH, CANDLE_REACH, dist);
+        return cosS * fade / ((dist2 + CANDLE_SOFT * CANDLE_SOFT) * PI);
+      }
+
+      // ...and the flame seen in the floor's glossy reflection
+      float candleGlossy(vec3 p, vec3 n, vec3 r) {
+        vec3 v = flamePoint() - p;
+        float dist2 = dot(v, v);
+        if (dist2 > CANDLE_REACH * CANDLE_REACH) return 0.0;
+        float dist = sqrt(dist2);
+        vec3 dir = v / dist;
+        float cosS = dot(n, dir);
+        float lobe = pow(max(0.0, dot(r, dir)), GLOSS_N);
+        if (cosS <= 0.0 || lobe < 1e-5) return 0.0;
+        if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
+        // the candle's boost is for what it lights; its reflection only needs to be a faint smudge
+        return 0.06 * (GLOSS_N + 2.0) / (2.0 * PI) * lobe * cosS / (dist2 + CANDLE_SOFT * CANDLE_SOFT);
+      }
+
       vec3 phongSample(vec3 r) {
         float r1 = rnd(), r2 = rnd();
         float cosT = pow(r2, 1.0 / (GLOSS_N + 1.0));
@@ -578,14 +948,20 @@
       void main() {
         rngState = pcg(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u + uint(uFrame) * 26699u) | 1u;
         vec2 uv = (gl_FragCoord.xy + vec2(rnd(), rnd())) / uRes * 2.0 - 1.0;
-        vec3 o = CAM;
-        vec3 d = safeDir(normalize(vec3(uv.x * uTanY * uRes.x / uRes.y, uv.y * uTanY, 1.0)));
+        vec3 o = uCamPos;
+        vec3 d = safeDir(normalize(uCamRight * (uv.x * uTanY * uRes.x / uRes.y) + uCamUp * (uv.y * uTanY) + uCamFwd));
 
-        float radiance = 0.0;
-        float throughput = 1.0;
+        // Two kinds of light are summed apart: the tubes' and the door's, and the candle's (its
+        // colour included, but not its strength or flicker, which post decides). The flame itself,
+        // seen straight on, is a third sum.
+        vec3 radiance = vec3(0.0);
+        vec3 candle = vec3(0.0);
+        float flame = 0.0;
+        vec3 throughput = vec3(1.0);
         bool countEmitters = true;
         for (int bounce = 0; bounce < 4; bounce++) {
           Hit h = trace(o, d);
+          if (bounce == 0) flame += flameGlow(o, d, h.t);
           if (h.m == M_NONE) break;
           vec3 p = o + d * h.t;
 
@@ -593,17 +969,24 @@
           if (h.m == M_TUBE) { if (countEmitters) radiance += throughput * e; break; }
           if (e > 0.0) { radiance += throughput * e; break; }
 
-          float a = albedo(h.m, p);
+          vec3 a = surface(h.m, p, h.n);
           vec3 n = h.n;
+          if (h.m == M_GLASS) candle += throughput * jarGlow(p, n);
 
-          // sealed concrete: a faint, slightly blurry mirror, strongest at grazing angles
-          if (h.m == M_FLOOR) {
-            float fresnel = 0.025 + 0.5 * pow(1.0 - max(0.0, -d.y), 5.0);
+          // sealed concrete, vinyl and glass: a faint, slightly blurry mirror, strongest at grazing angles
+          bool record = h.m == M_RECORD && vinyl(p, n);
+          bool glass = h.m == M_GLASS;
+          if (h.m == M_FLOOR || record || glass) {
+            float grazing = pow(1.0 - max(0.0, -dot(d, n)), 5.0);
+            float fresnel = glass ? 0.04 + 0.6 * grazing : (record ? 0.05 : 0.025) + (record ? 0.7 : 0.5) * grazing;
             if (rnd() < fresnel) {
               vec3 r = reflect(d, n);
-              radiance += throughput * glossyLight(p, n, r);
+              // a dark record shows every overbright sample as a white speck, so its highlights are capped
+              float mirrored = glossyLight(p, n, r);
+              radiance += throughput * (record ? min(mirrored, 3.0) : mirrored);
+              if (h.m == M_FLOOR && bounce < 2) candle += throughput * CANDLE_RGB * candleGlossy(p, n, r);
               d = safeDir(phongSample(r));
-              if (d.y < 0.0) d.y = -d.y;
+              if (dot(d, n) < 0.0) d = reflect(d, n);
               o = p + n * 2e-3;
               countEmitters = false;
               continue;
@@ -611,21 +994,23 @@
           }
 
           radiance += throughput * a * directLight(p, n);
+          // the candle's light only for the first two bounces: past that it is too faint to matter
+          if (bounce < 2) candle += throughput * a * CANDLE_RGB * candleLight(p, n);
           throughput *= a;
           d = safeDir(cosineSample(n));
           o = p + n * 2e-3;
           countEmitters = false;
         }
 
-        vec4 prev = texture(uPrev, gl_FragCoord.xy / uRes);
-        outColor = vec4(prev.r + radiance, 0.0, 0.0, 1.0);
+        vec2 pixel = gl_FragCoord.xy / uRes;
+        outBase = texture(uPrev, pixel) + vec4(radiance, flame);
+        outCandle = texture(uPrevCandle, pixel) + vec4(candle, 0.0);
       }
     </script>
     <script>
       const params = new URLSearchParams(location.search)
       const W = Number(params.get('w') ?? 960)
       const H = Number(params.get('h') ?? 600)
-      const FOV = Number(params.get('fov') ?? 52)
       const SPP = Number(params.get('spp') ?? 64)
 
       function compile(gl, type, source) {
@@ -677,10 +1062,11 @@
         return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
       }
 
-      // The writing on the blackboard, as a texture the shader lays over the slate: the name
+      // The writing on a blackboard, as a texture the shader lays over the slate: the tagline
       // in a handwriting font with an underline, a few stray marks, and the streaky haze a
-      // dry duster leaves behind. Red channel: 0 = bare slate, 1 = solid chalk.
-      function boardTexture() {
+      // dry duster leaves behind. Red channel: 0 = bare slate, 1 = solid chalk. Without
+      // writing (the music board, which the site writes on) it is just a different haze.
+      function boardTexture({ writing = true } = {}) {
         const w = 1024, h = 512
         const layer = () => {
           const c = document.createElement('canvas')
@@ -705,7 +1091,8 @@
           [0.84, 0.72, 0.2, 0.11, -0.3, 0.1],
           [0.42, 0.22, 0.3, 0.1, 0.05, 0.08],
         ]
-        for (const [cx, cy, sw, sh, angle, alpha] of smears) {
+        const wiped = writing ? smears : smears.map(([cx, cy, sw, sh, angle, alpha]) => [1 - cx, 0.1 + 0.85 * cy, 0.9 * sw, 0.8 * sh, -angle, 0.45 * alpha])
+        for (const [cx, cy, sw, sh, angle, alpha] of wiped) {
           haze.save()
           haze.translate(cx * w, cy * h)
           haze.rotate(angle)
@@ -718,41 +1105,43 @@
 
         // chalk: two lines, an underline that trails off, a couple of stray strokes
         const chalk = layer()
-        const lines = ['A theoretical', 'physics student']
-        chalk.font = `100px ${font}`
-        const size = Math.floor(Math.min(...lines.map((line) => (100 * 0.8 * w) / chalk.measureText(line).width)))
-        chalk.font = `${size}px ${font}`
-        chalk.textAlign = 'center'
-        chalk.textBaseline = 'middle'
-        chalk.lineJoin = 'round'
-        chalk.lineCap = 'round'
-        chalk.fillStyle = 'rgba(255,255,255,0.96)'
-        chalk.strokeStyle = 'rgba(255,255,255,0.9)'
-        chalk.filter = 'blur(0.8px)'
-        chalk.save()
-        chalk.translate(0.49 * w, 0.37 * h)
-        chalk.rotate(-0.03)
-        chalk.lineWidth = size * 0.035
-        chalk.strokeText(lines[0], 0, 0)
-        chalk.fillText(lines[0], 0, 0)
-        chalk.strokeText(lines[1], 0.01 * w, size * 1.15)
-        chalk.fillText(lines[1], 0.01 * w, size * 1.15)
-        chalk.lineWidth = size * 0.05
-        chalk.beginPath()
-        chalk.moveTo(-0.35 * w, size * 1.71)
-        chalk.quadraticCurveTo(-0.05 * w, size * 1.89, 0.31 * w, size * 1.75)
-        chalk.stroke()
-        chalk.restore()
-        chalk.lineWidth = 5
-        chalk.strokeStyle = 'rgba(255,255,255,0.75)'
-        chalk.beginPath()
-        chalk.moveTo(0.86 * w, 0.9 * h)
-        chalk.lineTo(0.9 * w, 0.87 * h)
-        chalk.moveTo(0.905 * w, 0.915 * h)
-        chalk.lineTo(0.93 * w, 0.9 * h)
-        chalk.moveTo(0.07 * w, 0.12 * h)
-        chalk.quadraticCurveTo(0.1 * w, 0.08 * h, 0.13 * w, 0.11 * h)
-        chalk.stroke()
+        if (writing) {
+          const lines = ['A theoretical', 'physics student']
+          chalk.font = `100px ${font}`
+          const size = Math.floor(Math.min(...lines.map((line) => (100 * 0.8 * w) / chalk.measureText(line).width)))
+          chalk.font = `${size}px ${font}`
+          chalk.textAlign = 'center'
+          chalk.textBaseline = 'middle'
+          chalk.lineJoin = 'round'
+          chalk.lineCap = 'round'
+          chalk.fillStyle = 'rgba(255,255,255,0.96)'
+          chalk.strokeStyle = 'rgba(255,255,255,0.9)'
+          chalk.filter = 'blur(0.8px)'
+          chalk.save()
+          chalk.translate(0.49 * w, 0.37 * h)
+          chalk.rotate(-0.03)
+          chalk.lineWidth = size * 0.035
+          chalk.strokeText(lines[0], 0, 0)
+          chalk.fillText(lines[0], 0, 0)
+          chalk.strokeText(lines[1], 0.01 * w, size * 1.15)
+          chalk.fillText(lines[1], 0.01 * w, size * 1.15)
+          chalk.lineWidth = size * 0.05
+          chalk.beginPath()
+          chalk.moveTo(-0.35 * w, size * 1.71)
+          chalk.quadraticCurveTo(-0.05 * w, size * 1.89, 0.31 * w, size * 1.75)
+          chalk.stroke()
+          chalk.restore()
+          chalk.lineWidth = 5
+          chalk.strokeStyle = 'rgba(255,255,255,0.75)'
+          chalk.beginPath()
+          chalk.moveTo(0.86 * w, 0.9 * h)
+          chalk.lineTo(0.9 * w, 0.87 * h)
+          chalk.moveTo(0.905 * w, 0.915 * h)
+          chalk.lineTo(0.93 * w, 0.9 * h)
+          chalk.moveTo(0.07 * w, 0.12 * h)
+          chalk.quadraticCurveTo(0.1 * w, 0.08 * h, 0.13 * w, 0.11 * h)
+          chalk.stroke()
+        }
 
         // rough both up: chalk never covers evenly, and the haze streaks along the wipe
         const out = layer()
@@ -779,6 +1168,48 @@
         }
         out.putImageData(img, 0, 0)
         return out.canvas
+      }
+
+      // The gold printing on the candle's glass, unrolled: u runs once round the jar (the middle of
+      // the texture faces LABEL_FACING), v from its rim down to its foot. Laid out from the Carby
+      // Musk tumbler: the name in a serif about half way up, the house's seven-ring mark under it,
+      // and the house's name in small capitals. Red channel: 1 = gold.
+      function labelTexture() {
+        const w = 1024, h = 420 // 25.8 cm round × 11 cm tall: about 39 px to the cm both ways
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = h
+        const ctx = c.getContext('2d')
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, w, h)
+        ctx.fillStyle = ctx.strokeStyle = '#fff'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'alphabetic'
+        const cm = h / 11
+        const fromFoot = (y) => h - y * cm // cm above the foot → px from the top
+        const fit = (text, font, width) => {
+          ctx.font = `100px ${font}`
+          return (100 * width) / ctx.measureText(text).width
+        }
+        const serif = 'Georgia, "Times New Roman", serif'
+        ctx.font = `${fit('Carby', serif, 1.9 * cm)}px ${serif}`
+        ctx.fillText('Carby', w / 2, fromFoot(4.7))
+        ctx.fillText('Musk', w / 2, fromFoot(4.0))
+        // seven rings: one in the middle, six round it
+        const ring = 0.1 * cm
+        ctx.lineWidth = 0.02 * cm
+        for (let i = 0; i < 7; i++) {
+          const a = (i * Math.PI) / 3
+          const [x, y] = i === 6 ? [0, 0] : [2 * ring * Math.cos(a), 2 * ring * Math.sin(a)]
+          ctx.beginPath()
+          ctx.arc(w / 2 + x, fromFoot(3.2) + y, ring, 0, 2 * Math.PI)
+          ctx.stroke()
+        }
+        const sans = 'Arial, Helvetica, sans-serif'
+        ctx.font = `${fit('BETTER WORLD', sans, 2.1 * cm) * 0.9}px ${sans}`
+        ctx.fillText('BETTER WORLD', w / 2, fromFoot(2.5))
+        ctx.fillText('FRAGRANCE HOUSE', w / 2, fromFoot(2.2))
+        return c
       }
 
       // Felzenszwalb & Huttenlocher's exact Euclidean distance transform, in place on a grid
@@ -1012,28 +1443,68 @@
         return { sdf, width: aw, height: ah, scale, loop: LOOP, pose }
       }
 
-      async function render() {
-        if ((await document.fonts.load('300px Michroma')).length === 0) throw new Error('Michroma did not load')
-        if (params.has('letters')) {
-          // debug: the letters' distance field, mid-grey along the outlines
-          const { sdf, width, height, pose } = hangingLetters()
-          const c = document.createElement('canvas')
-          c.width = width
-          c.height = height
-          const cx = c.getContext('2d')
-          const img = cx.createImageData(width, height)
-          for (let i = 0; i < sdf.length; i++) {
-            const byte = Math.round(Math.min(Math.max(0.5 - sdf[i] / 64, 0), 1) * 255)
-            img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = byte
-            img.data[i * 4 + 3] = 255
+      // ---- cameras ----
+      const sub = (a, b) => a.map((v, i) => v - b[i])
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+      const normalize = (a) => a.map((v) => v / Math.hypot(...a))
+
+      // A camera as the shader uses it, from where it stands, a point it looks at and its
+      // vertical field of view: each pixel's ray runs along fwd + x·right + y·up, with y from
+      // -tanY to tanY across the frame and x the same times the aspect ratio. No roll.
+      function lookAt({ pos, target, fov }) {
+        const fwd = normalize(sub(target, pos))
+        const right = normalize(cross([0, 1, 0], fwd))
+        return { pos, right, up: cross(fwd, right), fwd, tanY: Math.tan((fov * Math.PI) / 360) }
+      }
+
+      // The rectangle of GL pixels (y up), padded by a margin, that a world-space box (its 8
+      // corners, as from boxCorners) covers in the frame; null if none of it is in view. The
+      // part of the box in front of the camera is what gets projected: its corners there, plus
+      // where its edges cross the near plane.
+      function screenRect(cam, corners) {
+        const NEAR = 0.05
+        const depth = corners.map((p) => dot(sub(p, cam.pos), cam.fwd))
+        const points = corners.filter((_, i) => depth[i] >= NEAR)
+        for (let i = 0; i < 8; i++) {
+          for (const j of [i | 1, i | 2, i | 4]) {
+            if (j !== i && (depth[i] < NEAR) !== (depth[j] < NEAR)) {
+              const k = (NEAR - depth[i]) / (depth[j] - depth[i])
+              points.push(corners[i].map((v, a) => v + (corners[j][a] - v) * k))
+            }
           }
-          cx.putImageData(img, 0, 0)
-          return { gpu: 'none', stats: pose(0).layout, renderMs: 0, jpeg: c.toDataURL('image/jpeg', 0.92) }
         }
-        if (params.has('board')) {
-          // debug: just show the chalk texture
-          return { gpu: 'none', stats: {}, renderMs: 0, jpeg: boardTexture().toDataURL('image/jpeg', 0.92) }
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+        for (const p of points) {
+          const v = sub(p, cam.pos)
+          const z = Math.max(NEAR, dot(v, cam.fwd))
+          const sx = ((dot(v, cam.right) / (z * cam.tanY * (W / H))) * 0.5 + 0.5) * W
+          const sy = ((dot(v, cam.up) / (z * cam.tanY)) * 0.5 + 0.5) * H
+          x0 = Math.min(x0, sx)
+          x1 = Math.max(x1, sx)
+          y0 = Math.min(y0, sy)
+          y1 = Math.max(y1, sy)
         }
+        if (!points.length) return null
+        const margin = Math.max(8, Math.round((40 * W) / 2400))
+        const x = Math.max(0, Math.floor(x0) - margin), y = Math.max(0, Math.floor(y0) - margin)
+        const w = Math.min(W, Math.ceil(x1) + margin) - x, h = Math.min(H, Math.ceil(y1) + margin) - y
+        return w > 0 && h > 0 ? { x, y, w, h } : null
+      }
+
+      const boxCorners = (min, max) => [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]])
+
+      // ---- rendering ----
+      // Everything is set up once; render.mjs then drives the page through window.studio:
+      // stills, loop frames and walk frames from whatever camera it asks for.
+      async function setup() {
+        if ((await document.fonts.load('300px Michroma')).length === 0) throw new Error('Michroma did not load')
+        const fs = document.getElementById('fs').textContent
+        // scene constants the JS needs, read out of the shader so the two can't drift
+        const num = (name) => Number(fs.match(new RegExp(`\\b${name} = (-?[\\d.]+)`))[1])
+        const vec = (name) => fs.match(new RegExp(`\\b${name} = vec[23]\\(([^)]*)\\)`))[1].split(',').map(Number)
+        const CANDLE_RGB = vec('CANDLE_RGB')
+
         const canvas = document.getElementById('out')
         const gl = canvas.getContext('webgl2', { antialias: false })
         if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('no float render targets')
@@ -1042,10 +1513,11 @@
 
         const program = gl.createProgram()
         gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, document.getElementById('vs').textContent))
-        gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, document.getElementById('fs').textContent))
+        gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, fs))
         gl.linkProgram(program)
         if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program))
         gl.useProgram(program)
+        const uniform = (name) => gl.getUniformLocation(program, name)
 
         const quad = gl.createBuffer()
         gl.bindBuffer(gl.ARRAY_BUFFER, quad)
@@ -1054,29 +1526,41 @@
         gl.enableVertexAttribArray(aPos)
         gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
 
+        // two ping-pong targets, each with two float textures: the tubes' light and the flame (0),
+        // and the candle's light (1)
+        gl.clearColor(0, 0, 0, 0)
         const targets = [0, 1].map(() => {
-          const tex = gl.createTexture()
-          gl.bindTexture(gl.TEXTURE_2D, tex)
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, W, H, 0, gl.RGBA, gl.FLOAT, null)
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
           const fb = gl.createFramebuffer()
           gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
-          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
-          gl.clearColor(0, 0, 0, 1)
+          const tex = [0, 1].map((k) => {
+            const t = gl.createTexture()
+            gl.bindTexture(gl.TEXTURE_2D, t)
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, W, H, 0, gl.RGBA, gl.FLOAT, null)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, t, 0)
+            return t
+          })
+          gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('float render target incomplete')
           gl.clear(gl.COLOR_BUFFER_BIT)
           return { tex, fb }
         })
 
-        const boardTex = gl.createTexture()
-        gl.activeTexture(gl.TEXTURE1)
-        gl.bindTexture(gl.TEXTURE_2D, boardTex)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, boardTexture())
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-        gl.uniform1i(gl.getUniformLocation(program, 'uBoard'), 1)
+        const texture = (unit, name, source) => {
+          const tex = gl.createTexture()
+          gl.activeTexture(gl.TEXTURE0 + unit)
+          gl.bindTexture(gl.TEXTURE_2D, tex)
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+          gl.uniform1i(uniform(name), unit)
+        }
+        texture(1, 'uBoard', boardTexture())
+        texture(3, 'uBoard2', boardTexture({ writing: false }))
+        texture(5, 'uLabel', labelTexture())
 
         const letters = hangingLetters()
         const lettersTex = gl.createTexture()
@@ -1089,64 +1573,137 @@
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, sdfFilter)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-        gl.uniform1i(gl.getUniformLocation(program, 'uLetters'), 2)
-        gl.uniform1f(gl.getUniformLocation(program, 'uLetterScale'), letters.scale)
-        const poseLetters = (t) => {
-          const p = letters.pose(t)
-          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterHang'), p.hang)
-          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterSize'), p.size)
-          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterUV'), p.uv)
-          gl.uniformMatrix3fv(gl.getUniformLocation(program, 'uLetterRot'), false, p.rot)
-          gl.uniform4fv(gl.getUniformLocation(program, 'uLetterLegs'), p.legs)
-          gl.uniform3fv(gl.getUniformLocation(program, 'uLetterMin'), p.min)
-          gl.uniform3fv(gl.getUniformLocation(program, 'uLetterMax'), p.max)
-          return p
-        }
-        const still = poseLetters(0)
+        gl.uniform1i(uniform('uLetters'), 2)
+        gl.uniform1f(uniform('uLetterScale'), letters.scale)
         gl.activeTexture(gl.TEXTURE0)
 
-        const errors = {}
-        errors.afterSetup = gl.getError()
-        errors.fbStatus = targets.map((t) => {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb)
-          return gl.checkFramebufferStatus(gl.FRAMEBUFFER)
-        })
-        errors.readFormat = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT)
-        errors.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE)
-
         gl.viewport(0, 0, W, H)
-        gl.uniform2f(gl.getUniformLocation(program, 'uRes'), W, H)
-        gl.uniform1f(gl.getUniformLocation(program, 'uTanY'), Math.tan((FOV * Math.PI) / 360))
-        gl.uniform1i(gl.getUniformLocation(program, 'uPrev'), 0)
-        const uFrame = gl.getUniformLocation(program, 'uFrame')
+        gl.uniform2f(uniform('uRes'), W, H)
+        gl.uniform1i(uniform('uPrev'), 0)
+        gl.uniform1i(uniform('uPrevCandle'), 4)
+        const uFrame = uniform('uFrame')
+
+        // The record turns 3 times per loop (30 rpm, near enough to 33⅓) so the loop is seamless.
+        const SPIN_REVS = 3
+        // The candle breathes: its light's strength over time is 1 plus a few sines, each a whole
+        // number of cycles per loop so the loops stay seamless ([amplitude, cycles per loop,
+        // phase]). Post scales the candle's light by it; the flame stretches with it and its tip
+        // wanders. The site reads the same numbers to flicker the light it adds to its own
+        // things (the prints, the album cover).
+        const FLICKER = [[0.045, 2, 0.4], [0.03, 5, 2.1], [0.024, 11, 4.4], [0.018, 17, 1.3], [0.012, 29, 5.2]]
+        const flicker = (t) => 1 + FLICKER.reduce((sum, [amp, cycles, phase]) => sum + amp * Math.sin((2 * Math.PI * cycles * t) / letters.loop + phase), 0)
+        const wave = (t, cycles, phase) => Math.sin((2 * Math.PI * cycles * t) / letters.loop + phase)
+        // Everything that moves, at t seconds: the letters' pose (see hangingLetters), the
+        // record's angle and the flame. Returns the letters' box, which already covers their whole swing.
+        const setTime = (t) => {
+          gl.uniform4f(uniform('uFlame'), 0.0011 * wave(t, 3, 1.0) + 0.0005 * wave(t, 7, 2.5), 0.0008 * wave(t, 4, 0.3), 1 + 0.8 * (flicker(t) - 1), 0)
+          const p = letters.pose(((t % letters.loop) + letters.loop) % letters.loop)
+          gl.uniform4fv(uniform('uLetterHang'), p.hang)
+          gl.uniform4fv(uniform('uLetterSize'), p.size)
+          gl.uniform4fv(uniform('uLetterUV'), p.uv)
+          gl.uniformMatrix3fv(uniform('uLetterRot'), false, p.rot)
+          gl.uniform4fv(uniform('uLetterLegs'), p.legs)
+          gl.uniform3fv(uniform('uLetterMin'), p.min)
+          gl.uniform3fv(uniform('uLetterMax'), p.max)
+          gl.uniform1f(uniform('uSpin'), (2 * Math.PI * SPIN_REVS * t) / letters.loop)
+          return p
+        }
+        const setCamera = (cam) => {
+          gl.uniform3fv(uniform('uCamPos'), cam.pos)
+          gl.uniform3fv(uniform('uCamRight'), cam.right)
+          gl.uniform3fv(uniform('uCamUp'), cam.up)
+          gl.uniform3fv(uniform('uCamFwd'), cam.fwd)
+          gl.uniform1f(uniform('uTanY'), cam.tanY)
+        }
+
+        // Points in the scene the site pins its live overlays to, and the box the record's
+        // moving parts sit in (for the loops' patches), in world metres.
+        const yawWorld = (pos, c, s, [x, y, z]) => [pos[0] + c * x + s * z, y, pos[2] - s * x + c * z]
+        const board2 = (p) => yawWorld(vec('BOARD2_POS'), num('BOARD2_C'), num('BOARD2_S'), p)
+        const table = (p) => yawWorld(vec('TABLE_POS'), num('TABLE_C'), num('TABLE_S'), p)
+        const crate = (p) => yawWorld(vec('CANDLE_TABLE_POS'), num('BOARD2_C'), num('BOARD2_S'), p)
+        const candleC = vec('CANDLE_C'), crateH = num('CRATE_H'), flameY = num('FLAME_Y'), flameH = num('FLAME_H')
+        const halfW = num('BOARD_HALF_W'), y0 = num('BOARD_Y0'), y1 = y0 + num('BOARD_H')
+        const [recX, recZ] = vec('REC_C'), recY = num('REC_Y')
+        // A 12" sleeve standing on the floor, leaning back against the box's right side (+x in
+        // the box's frame), a little towards the front. Nothing is rendered there: the site draws
+        // the cover of what's playing onto it.
+        const sleeve = 0.314, lean = (14 * Math.PI) / 180, sleeveZ = -0.02, sideX = num('BOX_HW') + 0.004
+        const sleeveTopY = sleeve * Math.cos(lean), sleeveFootX = sideX + sleeve * Math.sin(lean)
+        const round = (p) => p.map((v) => +v.toFixed(4))
+        const anchors = {
+          // the music board's writing surface, as seen from the front: top left, top right, bottom right, bottom left
+          musicBoard: [[-halfW, y1, -0.016], [halfW, y1, -0.016], [halfW, y0, -0.016], [-halfW, y0, -0.016]].map((p) => round(board2(p))),
+          // the middle of the record's top
+          record: round(table([recX, recY, recZ])),
+          // the sleeve's front, seen from the front: top left, top right, bottom right, bottom left
+          albumCover: [
+            [sideX, sleeveTopY, sleeveZ - sleeve / 2],
+            [sideX, sleeveTopY, sleeveZ + sleeve / 2],
+            [sleeveFootX, 0, sleeveZ + sleeve / 2],
+            [sleeveFootX, 0, sleeveZ - sleeve / 2],
+          ].map((p) => round(table(p))),
+          // the patch of floor its shadow falls on, from the box's side out past its foot, same order
+          albumShadow: [
+            [sideX, 0, sleeveZ - sleeve / 2 - 0.04],
+            [sideX, 0, sleeveZ + sleeve / 2 + 0.04],
+            [sleeveFootX + 0.12, 0, sleeveZ + sleeve / 2 + 0.04],
+            [sleeveFootX + 0.12, 0, sleeveZ - sleeve / 2 - 0.04],
+          ].map((p) => round(table(p))),
+          // the middle of the candle's flame, where its light comes from
+          candle: round(crate([candleC[0], crateH + flameY + 0.4 * flameH, candleC[1]])),
+          // the corners of everything in the music corner: the box and player, the board on its stand, and the candle on its crate
+          musicCorner: [
+            ...boxCorners([-0.3, 0, -0.25], [0.3, 0.68, 0.25]).map(table),
+            ...boxCorners([-1.15, 0, -0.33], [1.15, 1.98, 0.33]).map(board2),
+            ...boxCorners([-0.18, 0, -0.16], [0.18, crateH + num('JAR_H') + 0.03, 0.16]).map(crate),
+          ].map(round),
+        }
+        // the candle's patch in the loops: the top of its crate, the jar and the flame, wherever it sways
+        const candleBox = (() => {
+          const pts = boxCorners([-0.17, crateH - 0.02, -0.15], [0.17, crateH + flameY + 1.3 * flameH, 0.15]).map(crate)
+          return boxCorners([0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i]))), [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i]))))
+        })()
+        const recordBox = (() => {
+          const pts = boxCorners([recX - 0.16, 0.59, recZ - 0.16], [recX + 0.16, recY + 0.015, recZ + 0.16]).map(table)
+          return boxCorners([0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i]))), [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i]))))
+        })()
 
         // Draw in horizontal bands so no single GPU command runs long enough to trip the
-        // Windows driver watchdog. Accumulates SPP light paths per pixel over a rectangle of
-        // the frame (GL coordinates, y up) and returns the target holding the sums; the rest
-        // of both targets is left alone, which is what lets renderFrame redo just a patch.
+        // Windows driver watchdog (about 2 s, after which Chrome loses the context). How many
+        // pixels a band can take depends on the view — close up, most rays hit the detailed
+        // things — so the band size follows how long the last band took. Accumulates spp light
+        // paths per pixel over a rectangle of the frame (GL coordinates, y up) and returns the
+        // target holding the sums; the rest of both targets is left alone, which is what lets
+        // a loop frame redo just patches.
         let current = 0
-        const accumulate = async (x0, y0, w, h) => {
-          const bands = Math.max(1, Math.ceil((w * h) / 400000))
+        let bandPixels = 100000
+        const accumulate = async (x0, y0, w, h, spp) => {
           gl.enable(gl.SCISSOR_TEST)
           gl.scissor(x0, y0, w, h)
           for (const target of targets) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
             gl.clear(gl.COLOR_BUFFER_BIT)
           }
-          for (let frame = 0; frame < SPP; frame++) {
+          for (let frame = 0; frame < spp; frame++) {
             const src = targets[current]
             const dst = targets[1 - current]
             gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb)
+            gl.activeTexture(gl.TEXTURE4)
+            gl.bindTexture(gl.TEXTURE_2D, src.tex[1])
             gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, src.tex)
+            gl.bindTexture(gl.TEXTURE_2D, src.tex[0])
             gl.uniform1i(uFrame, frame)
-            for (let b = 0; b < bands; b++) {
-              const b0 = y0 + Math.floor((b * h) / bands)
-              const b1 = y0 + Math.floor(((b + 1) * h) / bands)
-              gl.scissor(x0, b0, w, b1 - b0)
+            for (let b0 = y0; b0 < y0 + h; ) {
+              const rows = Math.max(1, Math.min(y0 + h - b0, Math.floor(bandPixels / w)))
+              gl.scissor(x0, b0, w, rows)
+              const began = performance.now()
               gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
               gl.finish()
-              if (errors.afterFirstDraw === undefined) errors.afterFirstDraw = gl.getError()
+              const ms = performance.now() - began
+              if (ms > 200) bandPixels = Math.max(4000, bandPixels / 2)
+              else if (ms < 50) bandPixels = Math.min(4000000, bandPixels * 1.2)
+              b0 += rows
             }
             current = 1 - current
             if (frame % 8 === 0) await new Promise((r) => setTimeout(r, 0))
@@ -1154,67 +1711,112 @@
           gl.disable(gl.SCISSOR_TEST)
           return targets[current]
         }
-        const started = performance.now()
-        const raw = new Float32Array(W * H * 4)
-        gl.bindFramebuffer(gl.FRAMEBUFFER, (await accumulate(0, 0, W, H)).fb)
-        errors.beforeRead = gl.getError()
-        gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, raw)
-        errors.afterRead = gl.getError()
-        const renderMs = performance.now() - started
-        let rawSum = 0
-        let rawMax = 0
-        for (let i = 0; i < raw.length; i += 4) {
-          rawSum += raw[i]
-          if (raw[i] > rawMax) rawMax = raw[i]
+        // reads a rectangle of both sums (GL coordinates) out of the target accumulate returned
+        const readSums = (target, x, y, w, h) => {
+          const sums = [0, 1].map((k) => {
+            const data = new Float32Array(w * h * 4)
+            gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
+            gl.readBuffer(gl.COLOR_ATTACHMENT0 + k)
+            gl.readPixels(x, y, w, h, gl.RGBA, gl.FLOAT, data)
+            return data
+          })
+          const error = gl.getError()
+          if (error) throw new Error(`GL error ${error}`)
+          return sums
         }
-        const stats = { glError: errors, rawMean: rawSum / (W * H), rawMax }
+        const renderFull = async (spp) => readSums(await accumulate(0, 0, W, H, spp), 0, 0, W, H)
 
         // ---- film look ----
-        // flip to top-down rows and average the samples
-        const luminance = (samples) => {
-          const lum = new Float32Array(W * H)
-          for (let y = 0; y < H; y++) {
-            for (let x = 0; x < W; x++) lum[(H - 1 - y) * W + x] = samples[(y * W + x) * 4] / SPP
-          }
-          return lum
+        // How strong the candle is and what colour its flame looks. Everything the candle adds is
+        // decided here rather than in the shader, so it can be tuned (studio.grade) without
+        // rendering again, and so it can flicker frame by frame over the same samples.
+        const grade = {
+          candle: 22, // the candle's light
+          flame: 1.0, // the flame seen straight on
+          flameRGB: [1.0, 0.7, 0.32],
+          halo: 0.5, // the glow round the flame
+          debugCandleOnly: false, // leave out the tubes' light, to see just the candle's
         }
 
-        // expose so the walls and floor sit in the mid-tones, whatever the light levels
-        const exposureFor = (lum) => {
-          const sorted = lum.filter((_, i) => i % 7 === 0).sort()
-          const median = sorted[Math.floor(sorted.length * 0.5)]
-          stats.median = median
+        // Flip to top-down rows, average the samples and mix the lights: the tubes' light as it
+        // is, the candle's scaled by its strength at time t; the flame on its own.
+        const mix = ([base, candle], spp, t) => {
+          const rgb = new Float32Array(W * H * 3), flame = new Float32Array(W * H)
+          const k = (grade.candle * flicker(t)) / spp, f = (grade.flame * flicker(t)) / spp
+          const b = grade.debugCandleOnly ? 0 : 1 / spp
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+              const s = (y * W + x) * 4, i = (H - 1 - y) * W + x
+              rgb[i * 3] = base[s] * b + candle[s] * k
+              rgb[i * 3 + 1] = base[s + 1] * b + candle[s + 1] * k
+              rgb[i * 3 + 2] = base[s + 2] * b + candle[s + 2] * k
+              flame[i] = base[s + 3] * f
+            }
+          }
+          return { rgb, flame }
+        }
+
+        // the exposure that puts the median pixel in the mid-tones, whatever the light levels
+        // (judged on the tubes' light alone, so the candle's strength never moves it)
+        const autoExposure = ([base]) => {
+          const lum = new Float32Array(Math.ceil((W * H) / 7))
+          for (let i = 0, j = 0; i < W * H; i += 7, j++) lum[j] = 0.2126 * base[i * 4] + 0.7152 * base[i * 4 + 1] + 0.0722 * base[i * 4 + 2]
+          const median = lum.sort()[Math.floor(lum.length * 0.5)] / SPP
           return median > 0 ? 0.34 / median : 1
         }
 
         // Everything after exposure — firefly clamp, bloom, tone curve, vignette, grain — the
-        // same for the still and for every video frame (the grain's seed included, so the
-        // grain sits still instead of crawling, which also keeps the video small).
-        const filmLook = (lum, exposure) => {
-          for (let i = 0; i < lum.length; i++) lum[i] *= exposure
+        // same for every still and every video frame (the grain's seed included, so the grain
+        // sits still instead of crawling, which also keeps the videos small). Each colour channel
+        // gets the same curve, so a grey pixel comes out exactly as the black-and-white look had it.
+        const filmLook = ({ rgb, flame }, exposure) => {
+          const n = W * H
+          for (let i = 0; i < 3 * n; i++) rgb[i] *= exposure
+          const lum = (i) => 0.2126 * rgb[i * 3] + 0.7152 * rgb[i * 3 + 1] + 0.0722 * rgb[i * 3 + 2]
 
           // Fireflies: a lone pixel far brighter than everything around it is noise, not
           // detail (real highlights like the tubes are big blobs), so pull it down.
-          const filtered = new Float32Array(lum)
+          const luma = new Float32Array(n)
+          for (let i = 0; i < n; i++) luma[i] = lum(i)
           for (let y = 1; y < H - 1; y++) {
             for (let x = 1; x < W - 1; x++) {
               const i = y * W + x
               let around = 0
               for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
-                  if (dx || dy) around = Math.max(around, lum[i + dy * W + dx])
+                  if (dx || dy) around = Math.max(around, luma[i + dy * W + dx])
                 }
               }
-              if (lum[i] > 2 * around + 0.05) filtered[i] = around
+              if (luma[i] > 2 * around + 0.05) {
+                const k = around / luma[i]
+                rgb[i * 3] *= k
+                rgb[i * 3 + 1] *= k
+                rgb[i * 3 + 2] *= k
+              }
             }
           }
-          lum.set(filtered)
+          // The flame goes in after that: it's a few pixels across and far brighter than what's
+          // round it, which is just what the clamp would take for a firefly.
+          for (let i = 0; i < n; i++) {
+            if (flame[i] === 0) continue
+            for (let c = 0; c < 3; c++) rgb[i * 3 + c] += flame[i] * exposure * grade.flameRGB[c]
+          }
 
-          const bright = new Float32Array(W * H)
-          for (let i = 0; i < lum.length; i++) bright[i] = Math.min(Math.max(lum[i] - 1.2, 0), 12)
           const scale = W / 2400
-          const bloomNear = blur(bright, W, H, Math.max(1, Math.round(5 * scale)))
-          const bloomFar = blur(bright, W, H, Math.max(2, Math.round(32 * scale)))
+          const channel = (c) => {
+            const out = new Float32Array(n)
+            for (let i = 0; i < n; i++) out[i] = rgb[i * 3 + c]
+            return out
+          }
+          const bloom = [0, 1, 2].map((c) => {
+            const bright = channel(c)
+            for (let i = 0; i < n; i++) bright[i] = Math.min(Math.max(bright[i] - 1.2, 0), 12)
+            return [blur(bright, W, H, Math.max(1, Math.round(5 * scale))), blur(bright, W, H, Math.max(2, Math.round(32 * scale)))]
+          })
+          // a candle flame in a photo wears a soft halo much wider than itself
+          const glow = new Float32Array(n)
+          for (let i = 0; i < n; i++) glow[i] = Math.min(flame[i] * exposure, 40)
+          const halo = blur(glow, W, H, Math.max(2, Math.round(18 * scale)))
 
           const out = document.createElement('canvas')
           out.width = W
@@ -1226,18 +1828,21 @@
           for (let y = 0; y < H; y++) {
             for (let x = 0; x < W; x++) {
               const i = y * W + x
-              let v = lum[i] + 0.35 * bloomNear[i] + 0.12 * bloomFar[i]
-              v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14) // ACES-style tone curve
-              v = Math.min(Math.max(v, 0), 1)
-              v = v + 0.45 * (v * v * (3 - 2 * v) - v) // more contrast: inky ceiling, chalky walls
-              v = Math.pow(v, 1 / 2.2)
               const dx = (x / W) * 2 - 1
               const dy = (y / H) * 2 - 1
-              v *= 1 - 0.3 * Math.min(1, (dx * dx + dy * dy) / 2) // vignette
-              v += (random() + random() - 1) * 0.03 // grain
-              const byte = Math.round(Math.min(Math.max(v, 0), 1) * 255)
+              const vignette = 1 - 0.3 * Math.min(1, (dx * dx + dy * dy) / 2)
+              const grain = (random() + random() - 1) * 0.03
               const p = i * 4
-              image.data[p] = image.data[p + 1] = image.data[p + 2] = byte
+              for (let c = 0; c < 3; c++) {
+                let v = rgb[i * 3 + c] + 0.35 * bloom[c][0][i] + 0.12 * bloom[c][1][i] + grade.halo * halo[i] * grade.flameRGB[c] * CANDLE_RGB[c]
+                v = (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14) // ACES-style tone curve
+                v = Math.min(Math.max(v, 0), 1)
+                v = v + 0.45 * (v * v * (3 - 2 * v) - v) // more contrast: inky ceiling, chalky walls
+                v = Math.pow(v, 1 / 2.2)
+                v *= vignette
+                v += grain
+                image.data[p + c] = Math.round(Math.min(Math.max(v, 0), 1) * 255)
+              }
               image.data[p + 3] = 255
             }
           }
@@ -1245,49 +1850,109 @@
           return out
         }
 
-        const lum = luminance(raw)
-        const exposure = exposureFor(lum)
-        stats.exposure = exposure
-        const out = filmLook(lum, exposure)
+        // The last still, which loop frames are built on: its camera, moment, samples and exposure.
+        let still = null
 
-        // The looping video: renderFrame(i, n) re-renders just the patch of the frame the
-        // letters can reach, at time i/n of the loop, drops it into the still's samples and
-        // runs the same film look — so everything outside the patch is pixel-identical to
-        // the still (same seeds, same post) and the patch's edges never show. The patch is
-        // the letters' padded box (which already allows for all their movement) projected
-        // into GL pixel coordinates, plus a margin.
-        const cam = document.getElementById('fs').textContent.match(/const vec3 CAM = vec3\(([^,]+),([^,]+),([^)]+)\)/).slice(1).map(Number)
-        const tanY = Math.tan((FOV * Math.PI) / 360)
-        const reach = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
-        for (const x of [still.min[0], still.max[0]]) {
-          for (const y of [still.min[1], still.max[1]]) {
-            for (const z of [still.min[2], still.max[2]]) {
-              const sx = (((x - cam[0]) / (z - cam[2]) / (tanY * (W / H))) * 0.5 + 0.5) * W
-              const sy = (((y - cam[1]) / (z - cam[2]) / tanY) * 0.5 + 0.5) * H
-              reach.x0 = Math.min(reach.x0, sx)
-              reach.x1 = Math.max(reach.x1, sx)
-              reach.y0 = Math.min(reach.y0, sy)
-              reach.y1 = Math.max(reach.y1, sy)
+        return {
+          // what render.mjs needs to know besides the pictures; the candle's numbers are for the
+          // site, which lights its own things by the same candle
+          info: () => ({
+            gpu,
+            loopSeconds: letters.loop,
+            anchors,
+            candle: {
+              flicker: FLICKER,
+              strength: grade.candle,
+              soft: num('CANDLE_SOFT'),
+              rgb: CANDLE_RGB,
+              // the jar's rim (height, radius) and the heights its light comes from (see flamePoint), so the site can tell how much of the flame clears the rim
+              jar: {
+                rim: +(crateH + num('JAR_H')).toFixed(4),
+                radius: num('JAR_R'),
+                light: [0.2, 0.65].map((k) => +(crateH + flameY + k * flameH).toFixed(4)),
+              },
+            },
+          }),
+
+          // debug: change the grade (see grade above) for the stills and frames that follow
+          grade(changes) {
+            Object.assign(grade, changes)
+            return grade
+          },
+
+          // debug: the last still again, with the grade as it is now
+          regrade() {
+            const { raw, time, exposure } = still
+            return { jpeg: filmLook(mix(raw, SPP, time), exposure).toDataURL('image/jpeg', 0.9) }
+          },
+
+          // A still from camera ({ pos, target, fov }) at time t (seconds), at the page's spp,
+          // with the given exposure or, if none, the automatic one. Also works out which
+          // patches of the frame move in its loop: the letters and the record, where visible.
+          async still({ camera, time = 0, exposure }) {
+            const cam = lookAt(camera)
+            setCamera(cam)
+            const pose = setTime(time)
+            const started = performance.now()
+            const raw = await renderFull(SPP)
+            const renderMs = Math.round(performance.now() - started)
+            const auto = autoExposure(raw)
+            const used = exposure ?? auto
+            const patches = [boxCorners(pose.min, pose.max), recordBox, candleBox].map((corners) => screenRect(cam, corners)).filter(Boolean)
+            still = { cam, time, raw, exposure: used, patches }
+            return { camera: cam, exposure: used, autoExposure: auto, patches, renderMs, jpeg: filmLook(mix(raw, SPP, time), used).toDataURL('image/jpeg', 0.84) }
+          },
+
+          // Frame i of n of the still's seamless loop: only the patches that move are rendered
+          // again, at that moment of the loop, and dropped into the still's samples before the
+          // same film look — so everything outside them is the still's samples (same seeds, same
+          // post) and their edges never show. The candle's light flickers over the whole frame,
+          // which post does by scaling it.
+          async loopFrame(i, n) {
+            const { cam, time, raw, exposure, patches } = still
+            const t = time + (letters.loop * i) / n
+            setCamera(cam)
+            setTime(t)
+            for (const c of patches) {
+              const sums = readSums(await accumulate(c.x, c.y, c.w, c.h, SPP), c.x, c.y, c.w, c.h)
+              for (let k = 0; k < 2; k++) {
+                for (let r = 0; r < c.h; r++) raw[k].set(sums[k].subarray(r * c.w * 4, (r + 1) * c.w * 4), ((c.y + r) * W + c.x) * 4)
+              }
             }
-          }
+            return filmLook(mix(raw, SPP, t), exposure).toDataURL('image/png')
+          },
+
+          // One whole frame of a walk: camera, time and exposure as for a still, at spp samples.
+          async frame({ camera, time, spp = SPP, exposure }) {
+            setCamera(lookAt(camera))
+            setTime(time)
+            return filmLook(mix(await renderFull(spp), spp, time), exposure).toDataURL('image/png')
+          },
+
+          // debug: the letters' distance field, mid-grey along the outlines, and where each letter ties on
+          letters() {
+            const c = document.createElement('canvas')
+            c.width = letters.width
+            c.height = letters.height
+            const cx = c.getContext('2d')
+            const img = cx.createImageData(letters.width, letters.height)
+            for (let i = 0; i < letters.sdf.length; i++) {
+              const byte = Math.round(Math.min(Math.max(0.5 - letters.sdf[i] / 64, 0), 1) * 255)
+              img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = byte
+              img.data[i * 4 + 3] = 255
+            }
+            cx.putImageData(img, 0, 0)
+            return { layout: letters.pose(0).layout, jpeg: c.toDataURL('image/jpeg', 0.92) }
+          },
+
+          // debug: the chalk textures of the two boards
+          board(writing = true) {
+            return { jpeg: boardTexture({ writing }).toDataURL('image/jpeg', 0.92) }
+          },
         }
-        const margin = Math.max(8, Math.round((40 * W) / 2400))
-        const crop = { x: Math.max(0, Math.floor(reach.x0) - margin), y: Math.max(0, Math.floor(reach.y0) - margin) }
-        crop.w = Math.min(W, Math.ceil(reach.x1) + margin) - crop.x
-        crop.h = Math.min(H, Math.ceil(reach.y1) + margin) - crop.y
-        window.renderFrame = async (i, frames) => {
-          poseLetters((letters.loop * i) / frames)
-          const target = await accumulate(crop.x, crop.y, crop.w, crop.h)
-          const sums = new Float32Array(crop.w * crop.h * 4)
-          gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
-          gl.readPixels(crop.x, crop.y, crop.w, crop.h, gl.RGBA, gl.FLOAT, sums)
-          for (let r = 0; r < crop.h; r++) raw.set(sums.subarray(r * crop.w * 4, (r + 1) * crop.w * 4), ((crop.y + r) * W + crop.x) * 4)
-          return filmLook(luminance(raw), exposure).toDataURL('image/png')
-        }
-        return { gpu, stats, renderMs: Math.round(renderMs), loopSeconds: letters.loop, crop, jpeg: out.toDataURL('image/jpeg', 0.84) }
       }
 
-      window.renderResult = render().catch((error) => ({ error: String(error && error.message ? error.message : error) }))
+      window.studio = setup()
     </script>
   </body>
 </html>

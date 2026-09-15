@@ -1,21 +1,44 @@
 .studio {
+  --flicker: 1; /* how bright the candle is in the frame on screen (set by Studio) */
   position: fixed;
   inset: 0;
   overflow: hidden;
   background: #0f0f0f;
+
+  /* clicked, and the walk is still loading */
+  &.is-setting-off {
+    cursor: progress;
+  }
 }
 
-.studio-photo {
+/* the rendered shots: the still, its loop and the walks, all exactly over each other; they
+   are pictures, not things to click */
+.studio-shot {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  pointer-events: none;
 }
 
-/* the video loop sits exactly over the still; it is decoration, not something to click */
-.studio-loop {
-  pointer-events: none;
+.studio-still {
+  animation: studio-cut 0.35s ease-out;
+}
+
+@keyframes studio-cut {
+  from {
+    opacity: 0;
+  }
+}
+
+/* a walk video stays hidden until its first frame is up, then covers everything */
+.studio-walk {
+  opacity: 0;
+
+  &.is-walking {
+    opacity: 1;
+  }
 }
 
 .studio-back {
@@ -44,5 +67,618 @@
   &:active {
     translate: 0 3px;
     box-shadow: 0 0 0 #1c1c1c;
+  }
+}
+
+/* ---- the music corner (MusicCorner.tsx) ---- */
+
+.studio-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* From the overview the whole corner is a button; it glows a little under the pointer */
+.music-hotspot {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 0.25s;
+
+  &:hover {
+    background-color: rgb(255 255 255 / 0.08);
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgb(255 255 255 / 0.7);
+    outline-offset: 4px;
+  }
+}
+
+/* The music board: an element the size of the slate at 1px = 1mm, laid onto the slate in
+   the render by a matrix3d transform from the camera (see planeTransform) */
+.board-plane {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2000px;
+  height: 1000px;
+  transform-origin: 0 0;
+}
+
+.board-area {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  /* three and two: tighter, so two rows fit in the height of the slate */
+  &.is-compact {
+    & .board-range {
+      font-size: 52px;
+      line-height: 1;
+    }
+
+    & .board-artists {
+      gap: 22px 40px;
+      margin-top: 30px;
+    }
+
+    & .board-caption {
+      margin-top: 16px;
+      font-size: 42px;
+      line-height: 1;
+    }
+  }
+}
+
+/* Candlelight. --warm is how much of the light on a thing is the candle's (0 to 1, worked out
+   from where it is, see candleWarmth), --flicker how bright the candle is in the frame on screen.
+   The candle brings the prints and the album cover to life: the more of their light is the
+   candle's, the more of their colour shows (see their img filters), and a warm wash from the
+   candle's side is blended over them. Chalk goes a little yellow. Under the pointer a picture
+   comes up in full colour and the wash eases off, so its own colours pop. */
+.board-sheet::after,
+.album-sleeve::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(250deg, rgb(255 200 116), rgb(255 186 100 / 0.55));
+  mix-blend-mode: soft-light;
+  opacity: calc(var(--warm, 0) * var(--flicker));
+  pointer-events: none;
+}
+
+.board-sheet:is(:hover, :focus-visible)::after,
+.album-sleeve:is(:hover, :focus-visible)::before {
+  opacity: calc(var(--warm, 0) * var(--flicker) * 0.35);
+}
+
+.board-range,
+.board-caption,
+.board-message {
+  filter: sepia(calc(var(--warm, 0) * var(--flicker) * 0.9));
+}
+
+/* Chalk: a handwriting face filled with speckled off-white, so the slate shows through */
+.chalk {
+  font-family: 'Kalam', 'Ink Free', 'Segoe Print', cursive;
+  font-weight: 400;
+  color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='c'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 0.92 0 0 0 0 0.92 0 0 0 0 0.9 2.6 0 0 0 -0.55'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23c)'/%3E%3C/svg%3E");
+  background-clip: text;
+  -webkit-background-clip: text;
+}
+
+.board-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 90px;
+}
+
+.board-range {
+  position: relative;
+  padding: 6px 22px;
+  font-size: 60px;
+  line-height: 1.1;
+  border: 0;
+  background-color: transparent;
+  cursor: pointer;
+  opacity: 0.6;
+  pointer-events: auto;
+  transition: opacity 0.2s;
+
+  &:hover,
+  &[aria-pressed='true'] {
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 4px dashed rgb(230 230 225 / 0.6);
+    outline-offset: 6px;
+  }
+}
+
+/* the chosen range is ringed in chalk */
+.chalk-ring {
+  position: absolute;
+  top: -16px;
+  left: -26px;
+  width: calc(100% + 52px);
+  height: calc(100% + 30px);
+  overflow: visible;
+  fill: none;
+  stroke: rgb(232 232 226 / 0.8);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 1.1;
+  stroke-dashoffset: 1.1;
+  transition: stroke-dashoffset 0.5s ease-out;
+
+  [aria-pressed='true'] > & {
+    stroke-dashoffset: 0;
+  }
+}
+
+.board-artists {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-content: center;
+  gap: 34px 40px;
+  margin: auto 0;
+  padding: 0;
+  list-style: none;
+  transition: opacity 0.3s;
+
+  &.is-loading {
+    opacity: 0.35;
+  }
+}
+
+.board-artist {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--column);
+}
+
+/* an A4 print of the artist, held on by a magnet */
+.board-sheet {
+  position: relative;
+  display: block;
+  box-sizing: border-box;
+  width: 210px;
+  height: 297px;
+  padding: 10px;
+  background: linear-gradient(170deg, #d8d5ce, #c4c1ba);
+  box-shadow:
+    0 10px 14px rgb(0 0 0 / 0.5),
+    0 1px 2px rgb(0 0 0 / 0.4);
+  rotate: var(--tilt);
+  isolation: isolate; /* the candlelight blends with the print, not what's behind it */
+  pointer-events: auto;
+  transition:
+    translate 0.2s,
+    scale 0.2s;
+
+  & img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* grey where the tubes light it, coloured by the candle: (1 − warm)² grey, so even a
+       little candlelight brings some colour back */
+    filter: grayscale(calc((1 - var(--warm, 0)) * (1 - var(--warm, 0)))) contrast(1.06) brightness(0.88);
+    transition: filter 0.3s;
+  }
+
+  &:hover,
+  &:focus-visible {
+    translate: 0 -10px;
+    scale: 1.06;
+    outline: none;
+
+    & img {
+      filter: saturate(1.4) contrast(1.08) brightness(1.06);
+    }
+  }
+}
+
+.board-magnet {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  width: 36px;
+  height: 36px;
+  margin-left: -18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 36% 30%, #b5b5b5 0 7%, #3a3a3a 34%, #141414 72%);
+  box-shadow: 0 5px 6px rgb(0 0 0 / 0.55);
+}
+
+.board-caption {
+  display: -webkit-box;
+  max-width: 100%;
+  margin: 26px 0 0;
+  font-size: 50px;
+  line-height: 1.05;
+  text-align: center;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.board-rank {
+  font-size: 1.2em;
+  font-weight: 700;
+}
+
+.board-message {
+  margin: auto 0;
+  font-size: 64px;
+}
+
+/* ---- the album cover leaning on the box ---- */
+
+/* The sleeve (314 mm square) and the floor under it, at 1px = 1mm and laid into the scene by
+   planeTransform like the board */
+.album-plane,
+.album-shadow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.album-plane {
+  width: 314px;
+  height: 314px;
+}
+
+/* darkest in the gap against the box, fading out past the sleeve's foot */
+.album-shadow {
+  width: 394px;
+  height: 196px;
+  background: linear-gradient(180deg, rgb(0 0 0 / 0.5), rgb(0 0 0 / 0.32) 40%, transparent);
+  filter: blur(10px);
+  animation: album-in 0.6s ease-out both;
+}
+
+.album-sleeve {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #1a1a1a;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+  isolation: isolate;
+  pointer-events: auto;
+  animation: album-in 0.6s ease-out both;
+
+  & img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: grayscale(calc((1 - var(--warm, 0)) * (1 - var(--warm, 0)))) contrast(1.06) brightness(0.82); /* as the prints */
+    transition: filter 0.3s;
+  }
+
+  /* lit by the tubes overhead: a little brighter along the top, darker down by the floor */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.1), transparent 30%, rgb(0 0 0 / 0.28));
+    pointer-events: none;
+  }
+
+  &:hover img,
+  &:focus-visible img {
+    filter: saturate(1.4) contrast(1.08) brightness(1.06);
+  }
+
+  &:focus-visible {
+    outline: 6px solid rgb(255 255 255 / 0.7);
+    outline-offset: 6px;
+  }
+}
+
+@keyframes album-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---- cartoon notes coming off the record ---- */
+
+.notes {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.note {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--cm) * -4);
+  width: calc(var(--cm) * 8);
+  transform-origin: 50% 100%;
+  opacity: 0;
+  animation: note-rise 3.2s cubic-bezier(0.3, 0.2, 0.6, 1) infinite;
+
+  & svg {
+    display: block;
+    width: 100%;
+    overflow: visible;
+    fill: #f3f1ea;
+    stroke: #121212;
+    stroke-width: 4px;
+    stroke-linejoin: round;
+    paint-order: stroke;
+    animation: note-sway 0.9s ease-in-out infinite alternate;
+  }
+
+  &:nth-child(1) {
+    --x: -9;
+    --turn: -20deg;
+  }
+
+  &:nth-child(2) {
+    --x: 8;
+    --turn: 16deg;
+    width: calc(var(--cm) * 9.5);
+    animation-delay: -0.55s;
+  }
+
+  &:nth-child(3) {
+    --x: 3;
+    --turn: -8deg;
+    animation-delay: -1.1s;
+
+    & svg {
+      animation-delay: -0.45s;
+    }
+  }
+
+  &:nth-child(4) {
+    --x: -5;
+    --turn: 22deg;
+    width: calc(var(--cm) * 9);
+    animation-delay: -1.65s;
+  }
+
+  &:nth-child(5) {
+    --x: 11;
+    --turn: -14deg;
+    animation-delay: -2.2s;
+
+    & svg {
+      animation-delay: -0.3s;
+    }
+  }
+
+  &:nth-child(6) {
+    --x: -12;
+    --turn: 10deg;
+    width: calc(var(--cm) * 7);
+    animation-delay: -2.75s;
+  }
+}
+
+@keyframes note-rise {
+  0% {
+    transform: translate(0, calc(var(--cm) * -2)) scale(0.3);
+    opacity: 0;
+  }
+  15%,
+  65% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(var(--x) * var(--cm)), calc(var(--cm) * -42)) scale(1) rotate(var(--turn));
+    opacity: 0;
+  }
+}
+
+@keyframes note-sway {
+  from {
+    translate: calc(var(--cm) * -1.2) 0;
+    rotate: -10deg;
+  }
+  to {
+    translate: calc(var(--cm) * 1.2) 0;
+    rotate: 10deg;
+  }
+}
+
+/* ---- the now-playing hologram ---- */
+
+.holo-beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  mix-blend-mode: screen;
+}
+
+.holo {
+  position: absolute;
+  translate: -50% -100%;
+  color: #e6faff;
+  pointer-events: auto;
+
+  &.is-clickable {
+    cursor: pointer;
+  }
+}
+
+.holo-float {
+  position: relative;
+  box-sizing: border-box;
+  padding: calc(var(--w) * 0.055) calc(var(--w) * 0.075);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgb(150 220 255 / 0.32), rgb(110 190 240 / 0.2));
+  border: 1px solid rgb(190 240 255 / 0.6);
+  border-radius: 6px;
+  box-shadow:
+    0 0 calc(var(--w) * 0.07) rgb(140 220 255 / 0.35),
+    inset 0 0 calc(var(--w) * 0.06) rgb(140 220 255 / 0.25);
+  backdrop-filter: blur(3px);
+  animation:
+    holo-bob 3.4s ease-in-out infinite,
+    holo-flicker 6s steps(1) infinite;
+
+  /* scanlines drifting down */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(180deg, rgb(200 245 255 / 0.12) 0 1px, transparent 1px 4px);
+    animation: holo-scan 3s linear infinite;
+    pointer-events: none;
+  }
+}
+
+.holo-label {
+  display: flex;
+  gap: 0.7em;
+  align-items: center;
+  margin: 0;
+  font-family: 'Michroma', ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(8px, calc(var(--w) * 0.036), 12px);
+  line-height: 1.2;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.holo-bars {
+  display: inline-flex;
+  gap: 2px;
+  align-items: flex-end;
+  height: 1.1em;
+
+  & i {
+    width: 2px;
+    height: 100%;
+    background: currentColor;
+    transform-origin: bottom;
+    animation: holo-eq 0.8s ease-in-out infinite alternate;
+
+    &:nth-child(2) {
+      animation-delay: -0.3s;
+    }
+    &:nth-child(3) {
+      animation-delay: -0.55s;
+    }
+    &:nth-child(4) {
+      animation-delay: -0.15s;
+    }
+  }
+}
+
+.holo-title,
+.holo-artist {
+  margin: 0;
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.holo-title {
+  margin-top: 0.4em;
+  font-size: clamp(14px, calc(var(--w) * 0.082), 26px);
+  font-weight: 600;
+  text-shadow: 0 0 10px rgb(140 220 255 / 0.85);
+}
+
+.holo-artist {
+  font-size: clamp(11px, calc(var(--w) * 0.058), 18px);
+  opacity: 0.85;
+}
+
+.holo-track {
+  color: inherit;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+@keyframes holo-bob {
+  50% {
+    translate: 0 calc(var(--w) * -0.02);
+  }
+}
+
+@keyframes holo-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  41% {
+    opacity: 0.82;
+  }
+  42% {
+    opacity: 1;
+  }
+  77% {
+    opacity: 0.9;
+  }
+  78% {
+    opacity: 1;
+  }
+}
+
+@keyframes holo-scan {
+  to {
+    background-position: 0 8px;
+  }
+}
+
+@keyframes holo-eq {
+  from {
+    scale: 1 0.25;
+  }
+  to {
+    scale: 1 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note {
+    opacity: 0.9;
+    animation: none;
+    transform: translate(calc(var(--x) * var(--cm) * 0.5), calc(var(--cm) * -16)) rotate(var(--turn));
+
+    &:nth-child(n + 3) {
+      display: none;
+    }
+
+    & svg {
+      animation: none;
+    }
+  }
+
+  .holo-float,
+  .holo-float::before,
+  .holo-bars i,
+  .album-sleeve,
+  .album-shadow {
+    animation: none;
   }
 }

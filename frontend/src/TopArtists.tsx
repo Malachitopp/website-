@@ -1,43 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useTopArtists, type TimeRange } from './spotify'
 
-type Artist = {
-  name: string
-  image?: string
-  genres: string[]
-  spotifyUrl: string
-}
-
-const TIME_RANGES = [
+const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'short_term', label: 'Last 4 weeks' },
   { value: 'medium_term', label: 'Last 6 months' },
 ]
 
 function TopArtists() {
-  const [artists, setArtists] = useState<Artist[] | null>(null)
-  const [timeRange, setTimeRange] = useState('medium_term')
-
-  useEffect(() => {
-    let ignore = false
-    fetch(`/api/top/artists?time_range=${timeRange}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(res.statusText)
-        return res.json()
-      })
-      .then((data) => {
-        if (!ignore) setArtists(data)
-      })
-      .catch(() => {
-        if (!ignore) setArtists([])
-      })
-    return () => {
-      ignore = true
-    }
-  }, [timeRange])
-
-  const selectTimeRange = (value: string) => {
-    setArtists(null)
-    setTimeRange(value)
-  }
+  const [timeRange, setTimeRange] = useState<TimeRange>('medium_term')
+  const { artists } = useTopArtists(timeRange)
 
   return (
     <div>
@@ -47,7 +18,7 @@ function TopArtists() {
             key={range.value}
             type="button"
             disabled={range.value === timeRange}
-            onClick={() => selectTimeRange(range.value)}
+            onClick={() => setTimeRange(range.value)}
           >
             {range.label}
           </button>

@@ -1,33 +1,8 @@
-import { useEffect, useState } from 'react'
 import SnoopyLedge from './SnoopyLedge'
-
-type NowPlayingData = {
-  is_playing: boolean
-  track?: string
-  artist?: string
-  albumArt?: string
-  songUrl?: string
-}
+import { useNowPlaying } from './spotify'
 
 function NowPlaying() {
-  const [data, setData] = useState<NowPlayingData | null>(null)
-
-  useEffect(() => {
-    const fetchNowPlaying = () => {
-      fetch('/api/now-playing')
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
-        })
-        .then(setData)
-        .catch(() => setData({ is_playing: false }))
-    }
-
-    fetchNowPlaying()
-    const interval = setInterval(fetchNowPlaying, 10000)
-
-    return () => clearInterval(interval)
-  }, [])
+  const data = useNowPlaying()
 
   return (
     <div className="now-playing">

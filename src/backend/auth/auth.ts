@@ -73,7 +73,13 @@ authRouter.get('/callback', async (req:Request, res: Response) => {
   }
 );
 
-export async function get_accessToken(refreshToken:string) {
+
+let cachedToken: string | null = null 
+let expiresAt = 0 
+let refreshing: Promise<string> | null = null 
+
+
+async function refresh_accessToken(refreshToken:string) {
     const response = await fetch('https://accounts.spotify.com/api/token', {
         method: 'POST',
         headers: {
@@ -90,8 +96,20 @@ export async function get_accessToken(refreshToken:string) {
         throw new Error(`failed to refresh access token: ${response.status} ${await response.text()}`)
     }
     const data = await response.json()
+    cachedToken = data.access_token 
+    expiresAt = Date.now() + data.expires_in * 1000 
 
     return data.access_token;
-}
+};
+
+export async function get_accessToken(refreshToken: string) {
+    if (cachedToken && Date.now() < expiresAt - 60_000) {
+        return cachedToken 
+    };
+    if (!refreshing) {
+        refreshing = refresh_accessToken(refreshToken).finally(()=> {refreshing = null})
+    };
+    return refreshing
+};
 
 export default authRouter;

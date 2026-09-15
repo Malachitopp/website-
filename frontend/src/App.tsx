@@ -9,6 +9,7 @@ function App() {
 
   switch (pathname) {
     case '/studio':
+    case '/studio/music':
       return <Studio />
     case '/spotify':
       return <SpotifyPage />

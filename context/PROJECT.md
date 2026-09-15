@@ -11,10 +11,16 @@ is for plain fundamentals over frameworks doing the work automatically.
 **The concept (decided 2026-09-15):** the home page is a full-bleed baby photo of
 the user with a thought bubble popping off their head that says "click me!".
 Clicking it dives into a black-and-white warehouse studio (the look of Frank
-Ocean's *Endless* visual album). The studio is deliberately mostly empty for now —
-the user will decide how to fill it — and the plan is for things in it to become
-clickable and lead to different areas of their life (Spotify, art, etc.). The
-name + Spotify content that used to be the whole site now lives on its own page.
+Ocean's *Endless* visual album). The user fills the studio object by object.
+**The main point of the studio (in the user's words, 2026-09-15): press on one of
+the items in it and "have the user almost walk towards it and focus in on it in a
+larger size that allows you to interact with it properly"** — "sort of like a video
+game but less complex". The first such item is the **music corner** (record player,
+top-artists board, now-playing hologram and album cover; built 2026-09-15), lit warm
+by a burning Carby Musk candle on a crate beside the board (added the same day — the
+one thing in the black-and-white hall with colour). Next planned, *later,
+not yet*: a computer you press to see all the user's projects and GitHub. The
+name + Spotify content that used to be the whole site still lives on its own page.
 
 ## Stack decisions made so far
 - **Frontend**: React via Vite (`react-ts` template), lives in `frontend/` with its
@@ -28,7 +34,8 @@ name + Spotify content that used to be the whole site now lives on its own page.
   on the History API: `usePathname()` (via `useSyncExternalStore`, listening to
   `popstate` plus a custom `app:navigate` event because `pushState` fires nothing),
   `navigate(to)`, and `isModifiedClick(event)` so ctrl/middle-clicks still open
-  new tabs. `App.tsx` is a `switch` on the pathname: `/studio` → `Studio`,
+  new tabs. `App.tsx` is a `switch` on the pathname: `/studio` and `/studio/music`
+  → `Studio` (the same element, so it keeps its state and walks between them),
   `/spotify` → `SpotifyPage`, anything else → `Home`.
 - **Backend**: Node + TypeScript + Express 5, in `src/backend/`. Compiled with `tsc`
   (root `tsconfig.json`, `rootDir: ./src`, `outDir: ./dist`) — so the real entry
@@ -66,10 +73,11 @@ name + Spotify content that used to be the whole site now lives on its own page.
     somewhere or its `router.get(...)` never runs.
   - The old `GET /` "Hello World" placeholder route has been removed.
 - **Studio image renderer** (`tools/studio-render/`, not part of the site build):
-  the studio page's background is a *rendered photo* plus a 6 s video loop of the
-  same frame in which the hanging name sways — not hand-drawn SVG or CSS. The
-  loops are encoded with the `ffmpeg-static` root devDependency. See the Frontend
-  section for details.
+  the studio page is *rendered photos* (a still + a 6 s loop per shot) and
+  pre-rendered camera walks between shots — not hand-drawn SVG or CSS, and not a
+  real-time 3D engine. Live data is HTML laid over the renders with the renderer's
+  own camera maths. Videos are encoded with the `ffmpeg-static` root devDependency.
+  See the Frontend section for details.
 
 ## Config bugs already hit and fixed (don't reintroduce)
 - Root `package.json` had a duplicate `"scripts"` key — merged into one.
@@ -141,10 +149,54 @@ name + Spotify content that used to be the whole site now lives on its own page.
   `node_modules/ffmpeg-static/ffmpeg.exe` was downloaded. If a fresh install ever
   leaves that file missing, run `npm install-scripts approve ffmpeg-static` and
   reinstall, or point the `FFMPEG` env var at any ffmpeg binary.
+- **`flat` is a reserved word in GLSL ES 3.00** (an interpolation qualifier):
+  naming a local `bool flat` fails to compile with "'flat' : syntax error".
+- **Close-up renders lost the WebGL context** (`GL error 37442`,
+  CONTEXT_LOST_WEBGL) with the old fixed 400 000-pixel draw bands: close up, most
+  rays hit the detailed objects, a band ran past the ~2 s Windows GPU watchdog.
+  `accumulate()` now sizes bands from how long the previous band took (starts at
+  100 000 px, halves over 200 ms, grows under 50 ms).
+- **SVG `vector-effect: non-scaling-stroke` breaks `pathLength`-based dash
+  animation** (the chalk ring drew half-way on both buttons). The ring uses a
+  plain scaled stroke instead.
+- **Studio on phones: don't fit the render to the screen height.** A version that
+  made the portrait render always full-height and scrolled sideways when wider
+  showed **black bars on nearly every phone** — with the browser's toolbars
+  showing, a phone's visible area (e.g. 393×660) is *wider* than the 1:2 portrait
+  render, so it never overflowed sideways. The user called the bars horrible and it
+  was reverted to `object-fit: cover` (which trims a little top and bottom). See
+  Remaining work for the swipe idea.
 - **`.env` keys written with a space before `=`** (`CLIENT_ID =…`) still load:
   Node's `--env-file` trims keys. But `grep '^CLIENT_ID='` misses them, which led
   an earlier session to wrongly record that those vars were missing from the
   desktop's `.env`. Grep with `'^KEY *='`.
+- **New overlay fields vs Vite hot reload.** Code that reads a new
+  `studio-scene.json` field (e.g. `anchors.albumCover`) hot-reloads into every
+  open browser at once, but the renderer only writes the field when a render
+  finishes. On 2026-09-15 the user's open page (something was playing) crashed
+  in `planeTransform` and stayed blank until refreshed — there's no error
+  boundary. Add the new fields to the existing JSON first (same maths as
+  `info()`; the render overwrites them with identical values), then the code.
+- **Git Bash rewrites arguments that start with `/`** into Windows paths (MSYS
+  path conversion): `node shoot.mjs … /studio/music` became
+  `C:/Program Files/Git/studio/music` and Chrome said "Cannot navigate to invalid
+  URL". Set `MSYS_NO_PATHCONV=1` and then give script paths as `C:/…` (with it
+  set, `/c/Users/…` paths break instead).
+- **Windows PowerShell 5.1 strips the double quotes out of JSON arguments** to
+  native programs (`node x.mjs '[{"name":…}]'` arrives as `[{name:…}]`). Pass JSON
+  from Bash, or via a file.
+- **Don't edit `tools/studio-render/index.html` while a render runs.** `render.mjs`
+  starts a fresh Chrome for every job and reloads the page from disk each time, so an
+  edit mid-run changes every job after it (`render.mjs` itself is safe — Node loaded
+  it once).
+- **`studio-scene.json` fields the site reads must come from `info()`.** The render's
+  last step rewrites the file with `info()`'s answer, so a field added to the JSON by
+  hand but not to `info()` is dropped at the end of the run. On 2026-09-15
+  `candle.jar` was lost that way (the site's `candleWarmth` reads it); fixed by adding
+  it to `info()` and running `--only none`.
+- **Watching render logs:** `render.mjs` prints progress with `\r`, and
+  `tail -f log | tr '\r' '\n' | grep --line-buffered …` delivers nothing because `tr`
+  buffers. Use `sed -u 's/\r/\n/g'`.
 
 ## Schema philosophy (important, keep revisiting this)
 - **No `users` table** — single-user site. Auth for write actions (uploading art,
@@ -250,41 +302,159 @@ name + Spotify content that used to be the whole site now lives on its own page.
   the cream cross-fades into the studio photo. Reduced motion → straight
   `navigate`. Modified clicks fall through to the browser.
 
-### `/studio` — `Studio.tsx` + `Studio.css` (the warehouse)
-- `<picture>`: `<source media="(orientation: portrait)" srcset={studioPortrait}>`
-  + `<img class="studio-photo" src={studioLandscape}>`, `position: fixed; inset:
-  0; object-fit: cover`. Tall phones get a separately framed portrait render
-  rather than a crop of the wide one. A "← back" pill button (top-left, uses
-  `navigate('/')`).
-- **The name moves (added 2026-09-15, after the user asked "how come you didn't
-  make them move a little bit?"):** over the still sits a `<video
-  class="studio-photo studio-loop">` (same `inset: 0; object-fit: cover`,
-  `pointer-events: none`, `autoPlay muted loop playsInline`, `aria-hidden`)
-  playing `studio-landscape.mp4` / `studio-portrait.mp4`: a 6 s seamless loop of
-  the *same frame* in which only the letters sway. Frame 0 of the loop is the
-  still, so the hand-over from JPEG to video is invisible, and if the video never
-  loads the still simply stays. Orientation is picked in JS with a tiny
-  `useMediaQuery()` (`useSyncExternalStore` on `matchMedia`, same style as the
-  router) and the element gets a `key` per framing so a rotated phone loads the
-  other file cleanly; `prefers-reduced-motion: reduce` renders no video at all.
-  The video is a whole frame rather than a small patch positioned over the letters
-  because a patch would need sub-pixel alignment with the JPEG under `object-fit:
-  cover`, and browsers scale and colour-convert `<video>` and `<img>` differently,
-  so any seam would show. Cost: 1.45 MB (landscape) / 1.09 MB (portrait) per
-  loop; the JPEG still paints first regardless. Verified in headless Chrome
-  against the production build: both framings autoplay, loop and report no media
-  error.
-- **What's in the scene (as of 2026-09-15):** a school blackboard on casters
-  parked mid-hall reading "A theoretical / physics student" in chalk, the glow of
-  the far loading door showing over its top, and the name "Malachi Topp" hanging
-  letter by letter on cords from a row of the fluorescent tubes near the top of
-  the frame, in an *Endless*-style extended sans, swaying gently in the video
-  loop. Both are **rendered into the photo** (lit by the tubes, reflected in the
-  floor), not HTML overlaid on it — see the renderer section for how. The name
-  used to be on the board; the user moved it to the ceiling and gave the board
-  the tagline.
-- **Nothing in it is clickable yet, on purpose.** The user wants it mostly blank
-  and will decide what goes in it. Future hotspots (Spotify, art, …) go here.
+### `/studio` and `/studio/music` — `Studio.tsx` + `Studio.css` (the warehouse)
+- **Shots.** Each shot (`overview` = the view from the door, `music` = the
+  close-up of the music corner) is a `<picture>` still (`<source media=
+  "(orientation: portrait)">` for the portrait render) with a seamless 6 s loop
+  `<video>` of the same frame over it (`autoPlay muted loop playsInline`,
+  `aria-hidden`). Frame 0 of each loop is its still, so the hand-over is
+  invisible and a video that never loads just leaves the still. All layers are
+  `.studio-shot` (`position: absolute; inset: 0; object-fit: cover;
+  pointer-events: none`). Framing is picked in JS with `useMediaQuery()`
+  (`useSyncExternalStore` on `matchMedia`); tall screens get separately framed
+  portrait renders rather than crops. Whole-frame videos rather than patches over
+  the JPEG: a patch would need sub-pixel alignment under `object-fit: cover`, and
+  browsers scale and colour-convert `<video>` and `<img>` differently.
+- **Walking between shots (added 2026-09-15).** The URL is the truth: clicking
+  the corner calls `navigate('/studio/music')`; a state machine in `Studio`
+  (`view` = the settled shot, `walk` = `{ to, framing, playing, ended }`, adjusted
+  *during render* — React's pattern for following an outside change — so the
+  `set-state-in-effect` lint rule stays happy) starts a walk whenever the path and
+  the settled view disagree. One persistent `<video class="studio-walk">` always
+  has the *next* walk from here as its `src` with `preload="auto"`, so it's loaded
+  before it's wanted; on a walk it `play()`s, stays `opacity: 0` until `playing`
+  (then covers everything and `view` switches underneath), and on `ended` waits
+  for the destination still's `onLoad` before letting go. If it can't play, or
+  isn't playing after 4 s, it cuts straight there (`cursor: progress` meanwhile).
+  The loop of a shot is only mounted while settled. Leaving: "← back" (and
+  Escape) in the close-up call `history.back()` if we walked in from `/studio`,
+  else `navigate('/studio')`; browser back/forward walk too. A rotated phone
+  mid-walk skips to the destination. `prefers-reduced-motion`: no loops, no walks,
+  just a cut (the still fades in over 0.35 s), static notes.
+- **Overlays follow the camera frame by frame.** While a walk plays,
+  `requestVideoFrameCallback` (rAF + `currentTime` fallback, both in `followFrames()`)
+  gives the presented frame's `mediaTime`; `round(mediaTime × fps)` indexes the
+  per-frame cameras in `studio-scene.json` (walking out plays them backwards).
+  Otherwise the shot's camera is used. **The candle's flicker follows the video too**:
+  another effect runs `followFrames` on whichever video is on screen (the walk, or
+  the settled shot's loop via `loopRef`) and writes `--flicker` =
+  `candleFlicker(scene time)` straight onto `.studio`'s style (no React state).
+  Scene time: overview loop = `mediaTime`, close-up loop = `walk.seconds +
+  mediaTime`, walk in = `mediaTime`, walk out = `mediaTime − walk.seconds` — the same
+  times the renderer used for those frames. No video (reduced motion, or still
+  loading) → the still's moment.
+- **`studioScene.ts`** — types for `assets/studio-scene.json` (written by the
+  renderer) and the projection maths, identical to the shader's camera: a point
+  lands at `(w/2 + k·(v·right)/z, h/2 − k·(v·up)/z)` with `k = coverScale ×
+  renderHeight / (2·tanY)` (the render covers the viewport, centred).
+  `planeTransform()` returns the `matrix3d` that lays a W×H px element (with
+  `transform-origin: 0 0`) onto a world quad in perspective (each column is the
+  projective image of the element's x, y and origin); `visiblePart()` samples a
+  quad to find which part of it is on screen. Checked by drawing the projected
+  slate outline onto renders: it lands exactly on the rendered slate.
+- **`MusicCorner.tsx`** — everything live in the corner, in one
+  `.studio-overlay` (`pointer-events: none`; interactive children opt back in):
+  - *The board*: a 2000×1000 px element (1 px = 1 mm) laid onto the music
+    board's slate with `planeTransform`, `inert` unless standing at the close-up.
+    Its layout fits what the close-up camera shows of the slate
+    (`visiblePart`): five across when it shows the whole slate, three-and-two
+    (`.is-compact`) when it only shows part. Both close-ups show the whole board
+    now, so it's five across on phones too; the compact branch is a fallback.
+    Chalk buttons "past 4 weeks" / "past 6 months" (`short_term` / `medium_term`,
+    default 4 weeks; `aria-pressed`, the chosen one gets a chalk ring that draws
+    in); five A4 prints (210×297 mm, image `object-fit: cover`, coloured by the
+    candlelight on them — see *Candlelight on the overlays* — and full colour with a
+    lift/grow/brighten pop on hover, slight hand-pinned tilt, a magnet on top, link to the artist on
+    Spotify); under each "1. Name" in chalk. Chalk = Google font **Kalam** filled
+    with an SVG `feTurbulence` speckle via `background-clip: text`. While a new
+    range loads the old list stays up at 35 % opacity; a failed load chalks
+    "couldn't reach spotify".
+  - *Notes*: six cartoon SVG notes (white, black outline, `paint-order:
+    stroke`) rising and swaying off the record on staggered CSS loops, sized in
+    `--cm` = px per centimetre at the record (min 2.4 px).
+  - *Hologram*: when `/api/now-playing` says something is playing (polled every
+    10 s; nothing rendered otherwise), a see-through cyan-tinted panel ("NOW
+    PLAYING" in **Michroma** with tiny equaliser bars, track — a Spotify link at
+    the close-up — and artist) on a gradient light beam from the record. It
+    floats 30 cm above the record up close and rises to 1.45 m from across the
+    hall (so it labels the corner without covering the boards), sliding between
+    with distance (`near` = px-per-metre at the record, 150 → 400); width
+    `clamp(min(180, 36vw), 46 cm, 340)`; kept 12 px inside the screen. On a phone
+    the close-up is far enough back that `near` ≈ 0.16, so the panel floats ~1.3 m
+    up at the top-left, clamped to the edge, and its faint beam crosses the first
+    print (see Remaining work). Bobs, flickers, has drifting scanlines.
+  - *Album cover* (user, 2026-09-15: "leaning against the right side of the box
+    … on the floor, propped up against the box's right side"): while something is
+    playing and the track has `albumArt`, a 314 mm square sleeve laid with
+    `planeTransform` onto `anchors.albumCover` (standing on the floor, leaning 14°
+    back against the box's +x side), over a blurred gradient shadow on
+    `anchors.albumShadow`. Coloured by the candlelight like the prints (≈ half colour
+    at its distance), full colour on hover; links to the
+    song when focused (`inert` otherwise). Remounts (fades in) per album. Nothing
+    is rendered there, so no re-render is needed to change how it looks.
+  - *Hotspot*: from the settled overview, a transparent `<button>` over the
+    projected bounding box of the whole corner (now including the candle's crate;
+    faint glow on hover); clicking the hologram there walks in too.
+  - *Candlelight on the overlays* (2026-09-15): the user wanted the candle to light
+    "all the album arts", which are HTML. `candleWarmth(point, normal)` in
+    `studioScene.ts` works out the candle's light the way the shader does (strength,
+    soft fall-off, facing, and how much of the flame clears the jar's rim from that
+    point, from `scene.candle.jar`) against `TUBE_LIGHT = 0.45` (the tubes' light on an
+    upright surface there: 0.18 direct, integrated in a scratch script exactly as
+    `directLight` does, plus about as much bounced), giving the share of the light
+    that's the candle's (≈ 0.41 on the left print → 0.87 on the right one, 0.29 on the
+    album cover). A layout effect in `MusicCorner` sets `--warm` on every `[data-lit]`
+    element on the board (the range buttons, each artist `li`, the error message) from
+    its layout position (`offsetLeft/Top` up to the board plane, 1 px = 1 mm) — deps
+    are the artist lists and area, not every walk frame. The album cover gets it
+    inline. CSS: **the light decides how much colour each picture shows** —
+    `grayscale((1 − warm)²)` on the img (so ≈ 65 % colour on the far-left print, ≈ 98 %
+    on the one by the candle, ≈ 50 % on the album cover); it isn't flickered, because
+    the img's `filter` transition would re-run every frame. Prints and the sleeve also
+    get a warm gradient `::after`/`::before` with `mix-blend-mode: soft-light` at
+    `opacity: var(--warm) × var(--flicker)` (both elements `isolation: isolate` so it
+    blends only with the picture). **Hover pop** (kept at the user's request): full
+    colour `saturate(1.4) contrast(1.08) brightness(1.06)`, the wash drops to 35 %, and
+    a print lifts 10 px and grows to 1.06. Chalk gets `filter: sepia()`. `--flicker` is
+    set on `.studio` by `Studio` every video frame (see the Studio bullet). **The light
+    never depends on the candle being on screen** (the user checked: "it doesn't make
+    sense if the light disappears"): the glow on the board/player is in the render, and
+    `--warm` comes from the candle's position — verified in a 1000×980 window where the
+    candle is half cropped off the right edge.
+- **`spotify.ts`** — `useNowPlaying()` and `useTopArtists(range)` (returns
+  `{ artists, latest }`: the list for this range or null while loading, and
+  whatever loaded last), shared by the studio and the Spotify page.
+- **What's in the scene (as of 2026-09-15):** the tagline blackboard on casters
+  mid-hall ("A theoretical / physics student", door glow over its top); the name
+  "Malachi Topp" hanging letter by letter from the tubes, swaying in the loops;
+  and the **music corner**: a little plywood crate (records filed spine-out
+  inside, one leaning) standing 50 cm right of and 50 cm in front of that board,
+  turned 30°, with a turntable on it (black plinth, strobe-dotted platter, vinyl
+  with a glossy reflection and a two-tone label so the spin shows, tonearm in the
+  grooves) that turns in the loops; and behind it, off to the right so the player
+  doesn't hide it, a second board of the same model (blank slate with wipe haze —
+  the site writes on it). All rendered into the photos; only the live data is HTML
+  (including the now-playing album cover leaning on the box — nothing is rendered
+  there).
+  The user placed the box relative to the board ("half a meter to the right … 50cm
+  in front so it's diagonal") and asked for the board "not directly behind it, but
+  behind it so that the board is visible".
+  **The candle (added 2026-09-15).** The user asked for "a candle from Drake's candle
+  company, maybe a Carby Musk candle, that shines a soft yellow light over the music
+  board and illuminates the record player and the table and all the album arts … look
+  realistic … prop it up on another little table like how the record player sits … on
+  the right side of the chalk board". Drake's brand is Better World Fragrance House; the
+  Carby Musk candle is a 10.5 oz navy glass tumbler with "Carby Musk" in a gold serif,
+  a seven-ring mark and "BETTER WORLD FRAGRANCE HOUSE" in small caps (product photos
+  from `betterworldfragrancehouse.co/cdn/shop/files/CM_Shopify.jpg` etc. — a plain curl
+  with a browser User-Agent works). Modelled at real size (8.2 cm × 11 cm, wax 6 mm
+  under the rim, 2.6 cm flame) on a plywood crate stood on end (34 × 30 × 66 cm, a shelf,
+  three hardbacks lying in the bottom, a box of matches and a spent match on top), at
+  (1.30, −0.50) in the music board's frame, squared up with it, just clear of its right
+  leg. **It is the only colour in the renders** besides what the site overlays: navy
+  glass, gold printing, and warm yellow light (`CANDLE_RGB` 1, 0.76, 0.42). On screen it
+  is small (≈ 35 px wide in the 2400 px close-up): the label reads as gold specks, the
+  flame as a bright point with a halo.
 - **History (don't re-propose):** the first version was a hand-drawn colour SVG
   cartoon of the user's actual bedroom (from their photo `IMG_2886.jpeg`: green
   bed, wall of paintings, desk with monitor/laptop/white PC, mesh chair). The user
@@ -294,46 +464,135 @@ name + Spotify content that used to be the whole site now lives on its own page.
 
 ### `tools/studio-render/` — how the studio images are made
 - `index.html` is a self-contained **WebGL2 path tracer** (one big fragment
-  shader, progressive accumulation into ping-pong RGBA32F textures, one sample per
-  pixel per frame). `render.mjs` drives it in headless Chrome over the DevTools
-  protocol and writes the JPEG stills **and the MP4 loops** the studio page uses.
-  Run from the repo root:
-  - `node tools/studio-render/render.mjs` → `frontend/src/assets/studio-landscape.jpg`
-    (2400×1500, vertical FOV 58°, 1024 spp, `row=2`) and `studio-portrait.jpg`
-    (1170×2340, FOV 80°, 1024 spp, `row=3`), each followed by its 144-frame
-    `studio-*.mp4` loop. **Stills ~10 s each on the AMD RX 6950 XT desktop, each
-    loop ~4–5 minutes there** (the Iris Xe laptop would take hours for the loops:
-    use `--stills` on it). `--stills` skips the videos; `--frames N` changes the
-    frame count (the loop is always 6 s, so N sets the fps).
-  - `--preview` (64 spp, small) takes a few seconds and writes `preview-*.jpg`
-    next to the script (gitignored); add `--frames 24` for rough `preview-*.mp4`
-    loops too (also gitignored). The loop is: edit → preview → look at both JPEGs
-    (and a few video frames, e.g. with ffmpeg's `select`/`tile` filters) → full
-    render. For A/B comparisons, copy `index.html` + `render.mjs` into scratch
-    folders with different constants and run each copy's `render.mjs` (it renders
-    whatever `index.html` sits beside it, previews into its own folder).
-  - **How the loops are made:** after the still, the page keeps its GL state and
-    `render.mjs` calls `window.renderFrame(i, n)` for each frame. That re-poses
-    the letters at time `i/n` of the loop (`pose(t)` in `hangingLetters`),
-    re-renders **only the patch of the frame the letters can reach** (their padded
-    world box projected to pixels plus a 40 px margin, at the same 1024 spp with
-    the same per-pixel seeds), drops those samples into the still's sample buffer
-    and runs the identical film look over the whole frame, so everything outside
-    the patch is pixel-identical to the still and the patch's edges never show.
+  shader, progressive accumulation into ping-pong RGBA32F textures — two per buffer
+  since the candle, see *Colour, and the candle's light kept apart* — one sample per
+  pixel per frame). The camera is uniforms (`uCamPos/Right/Up/Fwd`, `uTanY`), so
+  any shot can be rendered. `render.mjs` loads it in headless Chrome (query params
+  `w`, `h`, `spp`, `row`), waits for `window.studio` and calls its API over the
+  DevTools protocol: `still({camera, time, exposure})`, `loopFrame(i, n)`,
+  `frame({camera, time, spp, exposure})`, `info()` (GPU, loop length, anchors, and
+  `candle`: flicker, strength, soft, rgb, jar), plus debug `letters()` /
+  `board(writing)` / `grade(changes)` + `regrade()` (re-grade the last still without
+  rendering). Cameras are `{ pos, target, fov }`
+  (vertical fov; `lookAt` with no roll). `--only none` renders nothing and just
+  rewrites `studio-scene.json` from `info()` (about 10 s). Run from the repo root:
+  - `node tools/studio-render/render.mjs` → for each framing (landscape
+    2400×1500 / portrait 1170×2340) into `frontend/src/assets/`:
+    `studio-<framing>.jpg/.mp4` (overview, 1024 spp, 144-frame loop),
+    `studio-music-<framing>.jpg/.mp4` (close-up), `studio-walk-in-<framing>.mp4`
+    and `studio-walk-out-<framing>.mp4` (2 s at 30 fps = 61 frames, 512 spp, at
+    ⅔ resolution, CRF 24), then `studio-scene.json`. Options: `--stills` (no
+    videos), `--only overview,music,walk`, `--framing landscape|portrait`,
+    `--frames N` (loop frames), `--walk-fps N`, `--debug board|letters`,
+    `--stats`. A walk needs both stills' exposures (taken from the run, or from
+    the existing scene JSON when using `--only walk`).
+  - **Shots** (in `render.mjs`, metres): overview `pos [0, 1.6, 0]` looking down
+    +z (fov 58 landscape / 80 portrait); music close-up landscape `pos [2.0, 1.6,
+    6.0] → target [2.451, 1.05, 9.936]`, fov 30.47; portrait `pos [1.6, 1.6, 6.0] →
+    [2.67, 1.233, 9.837]`, fov 51.53. **Re-aimed again for the candle (2026-09-15)**
+    with the same kind of solver, adding the candle's crate (with the flame) to the
+    must-see points: landscape turned right a little at about the same size (slate
+    ≈ 660 px on 1920×950); portrait had to widen (fov 47 → 51.5, slate ≈ 288 → 259 px on
+    390×844, about 10 % smaller). Putting the crate beside the board's right leg rather
+    than further out kept that loss down (0.35 m further right would have cost 15 %).
+    The earlier cameras: landscape `→ [2.06, 1.06, 9.96]` fov 31.5, portrait
+    `→ [2.56, 1.1, 9.85]` fov 47. Re-framed 2026-09-15 because the user asked to
+    "zoom in a little less so that we can see the full chalk board since later I
+    might add something to the right", and the album cover on the floor had to be
+    in shot. Each was solved (scratch script) as the narrowest lens that keeps the
+    whole board on its stand, the cover and its shadow (and on wide screens the
+    whole box and player) inside what every likely screen shows under `cover`:
+    aspect 1.4–2.1 for landscape, 0.44–0.6 for portrait, 2 % margin; portrait also
+    centred vertically. Slate ≈ 670 px wide on a 1920×950 window (was ≈ 850), ≈ 295
+    px on a 390×844 phone (was 575 showing only the left ~1.1 m, prints then ≈
+    55×78 px). Before this, the portrait close-up was chosen for legibility: a
+    wider phone framing that also showed the player made the prints hard to read,
+    and now they are 32×44 px with 9 px-high captions on a 390×844 phone (55×80 px
+    on a 1600×900 window) — the user chose seeing the whole board. Both
+    close-ups are longer lenses than the overview, so the walk also zooms (the user
+    literally asked for the camera to "zoom in").
+  - **Walks** (`walk()` in `render.mjs`): 2 s, smootherstep ease for the body, the
+    head (yaw/pitch interpolated, not the target point) turning a little ahead,
+    fov interpolated, a 1.8 cm head bob over 4 steps, exposure interpolated in log
+    space between the two stills'. Time keeps running forwards both ways and each
+    walk ends on exactly the moment of the still it arrives at: in runs t = 0 → 2
+    s (the music still is rendered at t = 2), out runs t = −2 → 0 (the overview
+    still). The record turns 3 times per 6 s loop = once per 2 s, so the spin
+    matches at both ends too; only the letters can jump a few degrees when a walk
+    in starts at an arbitrary moment of the overview loop. The per-frame cameras
+    go into the scene JSON for the overlays.
+  - `--preview` (64 spp stills, 32 spp walks, 960×600 / 390×780) writes
+    `preview-studio-*` next to the script (gitignored, with `preview-*.json`); add
+    `--frames 24` / `--walk-fps 12` for rough videos. Workflow: edit → preview →
+    look (tile video frames with ffmpeg `select`/`tile`) → full render. To try
+    cameras, a scratch driver that calls `studio.still()` with candidate cameras
+    and draws the projected anchors on top is quicker than editing `render.mjs`.
+  - **How the loops are made:** after a still, the page keeps its samples and
+    `loopFrame(i, n)` re-poses everything that moves at time `still time + 6·i/n`
+    (`setTime()`: the letters' `pose(t)` and the record's `uSpin`), re-renders
+    **only the patches of the frame that move** — the letters' padded box and the
+    record's box, each projected to pixels (clipped against the near plane, so a
+    box partly behind the close-up camera doesn't become the whole frame) plus a 40
+    px margin, at the same spp with the same per-pixel seeds — drops those samples
+    into the still's buffer and runs the identical film look over the whole frame,
+    so everything outside the patches is pixel-identical to the still.
     Frames go to a temp dir as PNGs and are encoded by **ffmpeg-static** (root
     devDependency; the `FFMPEG` env var overrides it) as H.264 High / yuv420p
-    limited-range BT.709, CRF 20, preset slow, one keyframe per loop (`-g N`),
-    `+faststart`, no audio. The grain seed is fixed, so the grain is identical in
-    every frame: that is what keeps the files small (only the letters change
-    between frames). Sizes on 2026-09-15: landscape 1.45 MB, portrait 1.09 MB
-    (about 1.9 / 1.4 Mb/s).
-  - `--stats` prints GL error / exposure diagnostics; env `CHROME` overrides the
-    browser path, `ANGLE` the backend (default `vulkan`; see config bugs).
-  - Page query params (`render.mjs` sets them): `w`, `h`, `fov`, `spp`, `row`
-    (which row of tubes the name hangs from). Debug: `?board` returns just the
-    chalk texture, `?letters` just the letters' distance field (with `--stats`,
-    where each letter ties on and its resting angles).
-- **The scene** (metres, camera at eye level 1.6m looking down the hall): 16m wide,
+    limited-range BT.709, preset slow, one keyframe per video (`-g N`),
+    `+faststart`, no audio; CRF 20 for loops, 24 for walks. The grain seed is
+    fixed, so the grain is identical in every frame: that is what keeps the loops
+    small (only the patches change between frames).
+  - **Render times with the candle (RX 6950 XT, 2026-09-15): full render ≈ 50 min**
+    (48 min of rendering): stills 11–17 s; overview loops 644 s landscape / 485 s
+    portrait; close-up loops 409 / 354 s; walks ≈ 260 s each landscape, ≈ 196 s
+    portrait. Post is now ≈ 1.4 s a frame at 2400×1500 (per-channel bloom), which is
+    much of the loops' time. Sizes: landscape overview 0.45 MB + 1.54 MB loop, close-up
+    0.45 + 1.41, walks 1.06 + 1.04; portrait 0.34 + 1.12, 0.32 + 1.01, 0.75 + 0.71.
+    Exposures: landscape 1.847 / 1.825, portrait 1.938 / 1.934. Tuning the candle's
+    strength, colour or flicker is post-only but still needs every frame re-made, i.e.
+    a full render (`studio.grade` previews it on a still in seconds). The numbers below
+    are from before the candle.
+  - **Render times on the RX 6950 XT desktop (2026-09-15).** Full render ~38 min:
+    stills 8–13 s; overview loops ~11 min each (landscape 694 s, portrait 662 s) —
+    most of the time. With the re-framed close-ups: close-up loops ~3 min
+    (landscape 181 s, portrait 157 s), walks ~2.5–3 min (landscape 187 s, portrait
+    138 s), so **`--only music,walk` for both framings ≈ 18 min**. What a change
+    costs: the walk's path/easing/bob → `--only walk` (~11 min, ~5 with
+    `--framing`); where the close-up ends up, or `WALK_SECONDS` (the music still is
+    rendered at t = `WALK_SECONDS` and the record spin is timed to it) →
+    `--only music,walk`; anything that is an overlay (HTML/CSS) → no render. On the
+    Iris Xe laptop use `--stills` (and don't expect to render walks). **Sizes:**
+    landscape overview 0.45 MB still + 1.45 MB loop, close-up 0.46 + 1.19, walks
+    1.07 + 1.05 (5.7 MB for a landscape visit that walks in and out); portrait
+    0.33 + 1.09, 0.32 + 0.87, 0.78 + 0.74 (4.1 MB). `studio-scene.json` is 52 KB
+    (bundled into the JS). Exposures (auto, from the stills): landscape 1.84 / 1.78,
+    portrait 1.93 / 1.83.
+  - **Mid-render the site is inconsistent:** stills and videos are written as they
+    finish, but `studio-scene.json` only at the very end, so during a re-render the
+    dev site shows new images with old cameras (overlays off). Don't judge
+    alignment until the run exits.
+  - `--stats` prints exposures and loop patch rectangles; env `CHROME` overrides
+    the browser path, `ANGLE` the backend (default `vulkan`; see config bugs).
+- **The music corner** (added 2026-09-15): `TABLE_POS (1.81, 0, 10.98)` yawed 30°
+  (`TABLE_C/S`) and `BOARD2_POS (3.25, 0, 12.55)` yawed 20° (`BOARD2_C/S`). The
+  boards share one `blackboard(o, d, pos, c, s, slateMaterial, litter)` (only the
+  tagline board gets floor chalk); `nearestBoardLocal()` picks the frame for the
+  shared rail/stand/wheel materials; the music board's slate (`M_BOARD2`) samples
+  `uBoard2` = `boardTexture({ writing: false })` (mirrored, fainter haze, no
+  writing). `musicTable()` works in the box's frame: crate 52×42×50 cm of 18 mm
+  boards (grain along each board, joints in albedo), records as one spine block
+  plus a leaning sleeve (a rotated box), plinth 45×35 cm on rubber feet, platter
+  with strobe dots, record (`REC_C`, `REC_R`, `REC_Y`; label pattern rotated by
+  `uSpin`, clockwise from above), spindle, tonearm (pivot, tube, counterweight,
+  headshell, cartridge), arm rest, buttons. Vinyl outside the label takes the
+  floor's glossy branch (`vinyl()`, stronger Fresnel), with each sample's mirrored
+  light capped at 3 — uncapped, the black record showed every overbright sample as
+  a white speck and looked like glitter even at 1024 spp. `info().anchors` (from the
+  shader constants): the music slate's corners, the record's centre, the
+  corners of the whole corner (for the hotspot), and `albumCover` / `albumShadow`
+  (a 12" sleeve against the box's right side and the floor under it — computed in
+  the page's JS from `BOX_HW` and the table's frame, not modelled in the shader).
+- **The scene** (metres, overview camera at eye level 1.6m looking down the hall): 16m wide,
   55m long, 6.4m high box. 16 rows × 4 columns of fluorescent tubes hanging 0.8m
   below a near-black ceiling with deep cross beams; bare stud framing (studs every
   1.22m, plates + two rows of blocking) on the right wall; a stained white wall
@@ -430,11 +689,45 @@ name + Spotify content that used to be the whole site now lives on its own page.
   watchdog.
 - **Post (in JS)**: average samples → auto-exposure so the median pixel sits at
   0.34 → 3×3 firefly clamp → bloom (two box-blur radii on highlights) → ACES-style
-  tone curve → extra contrast (0.45) → gamma → vignette → grain → greyscale JPEG
+  tone curve → extra contrast (0.45) → gamma → vignette → grain → JPEG
   q0.84. Tweak the look here, not in the shader, when possible. Everything after
-  exposure is one function, `filmLook(lum, exposure)`, used for the still and for
-  every video frame with the still's exposure, so a frame can never be graded
+  exposure is one function, `filmLook({ rgb, flame }, exposure)`, used for the still
+  and for every video frame with the still's exposure, so a frame can never be graded
   differently from the still.
+- **Colour, and the candle's light kept apart (2026-09-15).** Until the candle the
+  path tracer carried one luminance per pixel and the JPEGs were greyscale; a yellow
+  light needs colour, so it is now RGB throughout (`surface()` gives each material a
+  colour — grey `vec3(albedo())` for everything but the jar and wax). The shader
+  writes **two float targets per ping-pong buffer** (MRT, `layout(location = 0/1)`,
+  `drawBuffers`): target 0 = light from the tubes and door (rgb) + the flame seen
+  straight on (a); target 1 = light from the candle (rgb, `CANDLE_RGB` baked in).
+  Clear colour is `(0,0,0,0)` — alpha is a sum now. `mix()` in post adds them:
+  tubes' light as is + candle × `grade.candle` × `flicker(t)`, and the flame goes in
+  **after** the firefly clamp (a few-pixel flame is exactly what the clamp removes),
+  with its own halo blur. Every step after exposure runs per channel with the same
+  curve, so grey pixels come out exactly as the black-and-white look had them; grain
+  is the same random value on all three channels. Auto-exposure is judged on the
+  tubes' light only, so tuning the candle never moves it. `studio.grade({...})` +
+  `studio.regrade()` re-grade the last still without rendering (`debugCandleOnly`
+  shows just the candle's light) — how the numbers below were tuned.
+  **The candle's light is deliberately unrealistic in strength:** a real candle
+  (≈ 1 cd) is invisible against these tubes (the tubes alone put 0.18 on the board's
+  face, the candle ~0.002), so `grade.candle = 22`, and its fall-off is softened
+  close to it (`1 / (d² + CANDLE_SOFT²)`, `CANDLE_SOFT = 0.7` m) so the board beside it
+  isn't burnt out while the record player 2.5 m away still warms up. It is only
+  sampled for the first two bounces and fades out between 5.4 and 9 m
+  (`CANDLE_REACH`). The jar's rim really does shade low things (the crate top, the
+  floor round it, the album cover partly) — the wax was raised to 6 mm under the rim
+  so the flame clears it for the record player. The floor's glossy reflection of the
+  flame is scaled to 0.06 (full strength it was a big bright blob in the overview).
+  The glass's own glow (`jarGlow`: the band above the wax lit through, fading below)
+  is tuned for `grade.candle = 22` — change one, retune the other.
+  **Flicker:** `FLICKER` = five sines, whole cycles per 6 s loop; post scales the
+  candle's light by it frame by frame over the same samples, and `uFlame` stretches
+  the flame and sways its tip. The light's *position* never moves (`flamePoint()`
+  samples the rest pose), so loop frames only need the flame's patch (`candleBox`)
+  re-rendered — everything else is the still's samples with a different scale. The
+  site reads `scene.candle.flicker` to flicker its own candlelight in step.
 - References the user gave: the Ithacan's *Endless* review still
   (`theithacan.org/.../endless.jpg`, front-on with big factory windows), a
   vinyl-sleeve photo (long hall, tubes receding, stud wall on the right — the
@@ -457,48 +750,77 @@ name + Spotify content that used to be the whole site now lives on its own page.
   traced from an eBay sticker; ledge line draws out, paws drop, head rises from a
   `clipPath`, eyes blink; `useId()` for the clip id; `translate(-50%, 12.57%)` so
   the ledge sits on the image's top edge) is still used by `NowPlaying.tsx`.
-- **`NowPlaying.tsx`**: polls `/api/now-playing` every 10s; checks `res.ok`. All
+- **`NowPlaying.tsx`**: polls `/api/now-playing` every 10s (via `useNowPlaying()`
+  in `spotify.ts`); checks `res.ok`. All
   states (Loading / "Not listening to anything right now" / playing) render inside
   one `.now-playing` div. Track line 24px `--text-h`; links (here and top-artist
   names) share one rule: no underline, underline on hover.
 - **`TopArtists.tsx`**: buttons for `short_term` / `medium_term` only (`long_term`
   deliberately removed by the user). Bordered `<table>`: rank | 80px image | name
-  (28px). Fetch effect uses an `ignore` flag to drop stale responses, checks
-  `res.ok`, keys rows by `spotifyUrl`; `setArtists(null)` happens in the click
-  handler (ESLint `react-hooks/set-state-in-effect` flagged it inside the effect).
+  (28px). Data from `useTopArtists()` in `spotify.ts` (an `ignore` flag drops
+  stale responses; "loading" is derived by comparing the loaded range with the
+  requested one, so nothing sets state synchronously in the effect — ESLint's
+  `react-hooks/set-state-in-effect` flags that). Rows keyed by `spotifyUrl`.
 - Frontend `tsc -p tsconfig.app.json`, `eslint .` and `vite build` all pass;
   backend `tsc --noEmit` passes.
 
 ## Remaining work
-- **Studio hotspots** (the actual point of the studio): decide what objects go in
-  the warehouse and where they link (Spotify page, art, etc.). The user wants to
-  choose the contents; don't populate it unprompted. The precedent so far
-  (board, hanging name) is to **render objects into the scene**; making one
-  clickable will mean an invisible HTML hit area positioned over the photo with
-  the same fractional-coordinate trick the home-page bubble uses (separately for
-  the landscape and portrait renders, whose framings differ). The video loop now
-  sits over the still with `pointer-events: none`, so hit areas go above it.
-- **Floating Zs (snoring) and music notes — discussed 2026-09-15, not started,
-  blocked on the user.** They asked whether the renderer can do these too.
-  Recommended split, which they haven't answered yet: render the *object* making
-  the sound into the scene, and draw the Zs / notes as an animated SVG or CSS
-  overlay positioned over the photo with the home-page bubble's
-  fractional-coordinate trick. The overlay is free to iterate on and can be live:
-  notes could float only while `/api/now-playing` says something is playing. The
-  alternative, rendering them into the loop like the name, works technically
-  (extruded glyphs, a patch covering their whole rise) but their rise needs a far
-  bigger patch than the swaying letters, so loops render longer and the MP4s get
-  heavier, and anything that glows would relight the whole frame and break the
-  patch trick. **Open question for the user:** nothing in the studio sleeps or
-  plays music yet — what would be snoring, and where does the music come from (a
-  record player, a speaker…)? Don't invent it. Remember inline SVG needs
-  `overflow: visible` for Zs that drift past the viewBox (see config bugs).
-- **Commit the studio work from 2026-09-15**: the board move, the hanging name
-  (3D letters, ink tie points, bridle, motion), `tools/studio-render/
-  Michroma-Regular.ttf`, the two re-rendered JPEGs, the two new MP4 loops
-  (`frontend/src/assets/studio-*.mp4`), the `ffmpeg-static` devDependency in the
-  root `package.json`/lock, the `.gitignore` line for `preview-*.mp4` and the
-  `Studio.tsx`/`Studio.css` video layer were all left uncommitted.
+- **Next studio item — LATER, NOT NOW (user, 2026-09-15): a computer** you press
+  to walk up to, showing all the user's projects and GitHub. Same recipe as the
+  music corner: model it into the shader (with anchors for its screen), add a shot
+  + walks in `render.mjs`, then an overlay component that lays the "screen" HTML
+  onto the monitor with `planeTransform`. `Studio`'s state machine is written for
+  two shots; a third means walks between any pair (or always via the overview) and
+  a `view` per path (e.g. `/studio/computer`). Don't start it until they ask. The
+  user still decides what else goes in the studio; don't populate it unprompted.
+- **MAYBE, low priority (user, 2026-09-15: "I don't believe it's important, it
+  renders fine on my screen"): swipe to look around on phones.** When the render
+  is wider than the screen, let the user swipe left/right to move the view "sort
+  of like a video game but less complex". Must not bring back black bars (see
+  config bugs). Would likely be a horizontal pan of the covered image (and the
+  overlays with it) rather than a scroll container.
+- **Floating Zs (snoring) — still an open question for the user.** Nothing in the
+  studio sleeps yet; don't invent what snores. The music notes were done as the
+  recommended overlay (see `MusicCorner`), and Zs would work the same way.
+  Remember inline SVG needs `overflow: visible` for things that drift past the
+  viewBox.
+- **Music corner polish, if the user wants it:** the notes always float (the
+  record always spins in the renders) even when nothing is playing — they could
+  be hidden then, but the spin is baked into the loop. The hologram is tinted cyan
+  as the one coloured light in the scene; the user said "opaque hologram", read as
+  see-through/glowing — adjust if they meant solid; the candle is now the second,
+  warm light. (The prints and album cover used to be
+  greyscale until hovered; the user found that "makes the website too gray" and asked
+  for the candle's light to bring their colour to life, keeping the pop on hover —
+  done 2026-09-15, so phones see colour too.) **On phones the hologram
+  floats high at the top-left and its beam crosses the first print** (offered to
+  bring it down by the player — e.g. base `near` on the close-up's own
+  px-per-metre instead of an absolute one). **Phone legibility** since the
+  whole-board framing: prints 32×44 px, captions 9 px; the user hasn't judged it on
+  their real phone yet. If too small: bigger chalk/prints when the slate is small
+  on screen (overlay only, no render), or a partial-board phone framing again.
+- **IDEA, not decided (user asked 2026-09-15: "is it possible to fetch the music
+  video from [the song URL]?").** Not from Spotify: the Web API has no video for a
+  track, and Canvas clips are only on unofficial endpoints (fragile, against the
+  terms). The workable route explained: a backend route (the user writes it,
+  walked through step by step) that searches the **YouTube Data API** `search.list`
+  for `"<artist> <track> official music video"` (music category, embeddable only),
+  returns a video ID with the now-playing data, and the frontend plays it muted in a
+  YouTube embed (optionally seeked to Spotify's `progress_ms`, which
+  `/api/now-playing` doesn't return yet). Catches: a search costs 100 of the 10 000
+  free daily units → search only when the track changes and cache it (a real use for
+  `spotify_cache.metadata`); wrong matches (lyric/live/fan videos); songs with no
+  video; embedding blocked or region-locked for some label videos; YouTube's player
+  rules (at least 200×200 px, not covered, no downloading the video to render it into
+  the scene) — which matters for putting it *in* the studio, especially on phones;
+  the API key stays server-side. **Open question put to the user: where it plays** —
+  in the hologram, on something new like a TV, or in a pop-up from the album cover.
+- **Commit the studio work**: everything above from 2026-09-15 (renderer with the
+  candle and colour pipeline, the
+  new assets in `frontend/src/assets/studio-*` including `studio-scene.json` and
+  the walk videos, `Studio.tsx`/`Studio.css`, `MusicCorner.tsx`, `studioScene.ts`,
+  `spotify.ts`, the `TopArtists`/`NowPlaying` refactor, `App.tsx`, the fonts in
+  `index.html`, `.gitignore`) is uncommitted.
 - **Backend review leftovers** (user is fixing these themselves, walking through
   together):
   - `getCurrent.ts`: guard `data.item === null` → return `{ is_playing: false }`.
@@ -544,10 +866,27 @@ name + Spotify content that used to be the whole site now lives on its own page.
   `http://127.0.0.1:3000`), and `npm run dev` inside `frontend/` (Vite,
   `http://localhost:5173` — open this one; the studio is `/studio`). Postgres
   (`docker compose up`) only needed once DB-backed features exist.
+- **On the user's phone** (they test there): `npm run dev -- --host` inside
+  `frontend/`, then `http://<PC's LAN IP>:5173/studio` on the same Wi-Fi — Vite
+  prints the address next to "Network:" (the desktop was `192.168.0.100` over
+  Ethernet on 2026-09-15). The `/api` proxy runs on the PC, so Spotify data works
+  on the phone too. The desktop's network profile is Public, but Windows Firewall
+  already has inbound allow rules for Node.js on Public and Private. A connected
+  phone shows up as a remote address in `Get-NetTCPConnection -LocalPort 5173`.
 - `.gitignore` ignores `*.png` (so reference photos can sit in the repo folder
   without being committed), `dist/`, and `tools/studio-render/preview-*.jpg` /
-  `preview-*.mp4`. The JPEGs **and MP4s** in `frontend/src/assets/` are **meant**
-  to be committed — the site needs them.
+  `preview-*.mp4` / `preview-*.json`. The JPEGs, MP4s **and `studio-scene.json`**
+  in `frontend/src/assets/` are **meant** to be committed — the site needs them.
+- Checking the studio walks (2026-09-15): headless Chrome against the Vite dev
+  server with `--autoplay-policy=no-user-gesture-required`; intercept
+  `/api/now-playing` with `Fetch.enable` + `Fetch.fulfillRequest` to fake a playing
+  track (the hologram and album cover only show when something plays; give
+  `albumArt` an SVG `data:` URI so no network is needed); click the hotspot with
+  `Input.dispatchMouseEvent`. To check the overlays line up with a walk, pause the
+  walk video mid-walk and seek it (`requestVideoFrameCallback` still fires on
+  seeks), with `.board-plane { outline: 5px solid red }` injected: the outline must
+  sit on the rendered slate. Live screenshots mid-walk can look misaligned just from
+  capture timing.
 - UI verification used in sessions: headless Chrome
   (`C:/Program Files/Google/Chrome/Application/chrome.exe`) driven over the
   DevTools protocol from small Node scripts kept in the session scratchpad (not
@@ -570,7 +909,19 @@ name + Spotify content that used to be the whole site now lives on its own page.
   motion without playing video, tile a few frames into one image with
   ffmpeg-static, e.g. `-vf "select='not(mod(n\,36))',crop=W:H:X:Y,tile=1x4"`, or
   difference-blend two frames to confirm only the letters' patch changes. To zoom
-  into a render, crop and upscale with PowerShell `System.Drawing`.
+  into a render, crop and upscale with PowerShell `System.Drawing`; to zoom into a
+  small overlay on the live page, `Page.captureScreenshot` with a `clip` (with
+  `scale`) around its `getBoundingClientRect()`, which also gives real on-screen
+  sizes to report (e.g. the prints' px on a phone).
+- **Framing a camera shot** (2026-09-15): rather than guessing values, a scratch
+  Node solver over candidate positions found the yaw/pitch and narrowest fov that
+  keep a list of must-see world points inside the region every likely screen
+  shows under `object-fit: cover`, then `studio.still()` previews with the
+  projected quads and those crop rectangles drawn on confirmed it. Long renders
+  are best watched with a Monitor on the render log's "frames in" / "spp in"
+  lines; process detection via `ps -W` / `wmic` from Git Bash doesn't work (it
+  reported a running render as exited) — rely on the background task's own exit
+  notification.
 
 ## Deployment plan (not started yet)
 - Target: something like Vercel/Netlify — frontend built via Vite, backend as
@@ -612,8 +963,8 @@ website-/                        (repo root)
 │       └── migrations_002.sql   (empty)
 ├── tools/
 │   └── studio-render/
-│       ├── index.html           (WebGL2 path tracer: hall, blackboard, hanging name; film post)
-│       ├── render.mjs           (headless-Chrome driver; writes the studio JPEGs and MP4 loops)
+│       ├── index.html           (WebGL2 path tracer: hall, both blackboards, hanging name, music corner, the candle on its crate; colour film post with the candle's flicker; overlay anchors)
+│       ├── render.mjs           (headless-Chrome driver; shot cameras; writes stills, loops, walks and studio-scene.json)
 │       ├── Michroma-Regular.ttf (OFL font for the hanging name; commit it)
 │       └── preview-*.jpg/.mp4   (gitignored quick renders)
 ├── frontend/                    (Vite React app, own package.json/tsconfigs/eslint.config.js)
@@ -628,15 +979,21 @@ website-/                        (repo root)
 │       ├── App.css              (Spotify page: name, table, now-playing, SnoopyLedge styles)
 │       ├── Home.tsx / Home.css  (baby photo, thought bubble, zoom-in transition)
 │       ├── ThoughtCloud.tsx     ("click me!" cloud SVG)
-│       ├── Studio.tsx / Studio.css   (rendered warehouse photo, video loop on top, back button)
+│       ├── Studio.tsx / Studio.css   (shots, loops, walks between them, --flicker in step with the video; all studio + music corner styles incl. candlelight)
+│       ├── MusicCorner.tsx      (live overlay: top-artists board, notes, now-playing hologram, album cover, hotspot; --warm per lit thing)
+│       ├── studioScene.ts       (types for studio-scene.json; projection + matrix3d maths; candleFlicker / candleWarmth)
+│       ├── spotify.ts           (useNowPlaying / useTopArtists hooks)
 │       ├── SpotifyPage.tsx      (name + NowPlaying + TopArtists)
 │       ├── NowPlaying.tsx       (album art with SnoopyLedge hover)
 │       ├── TopArtists.tsx       (time-range buttons + ranked table)
 │       ├── SnoopyLedge.tsx      (peek-over-ledge Snoopy on album hover)
 │       └── assets/
 │           ├── baby-me-1200.jpg / baby-me-2000.jpg   (home photo)
-│           ├── studio-landscape.jpg / studio-portrait.jpg   (from tools/studio-render)
-│           ├── studio-landscape.mp4 / studio-portrait.mp4   (6 s loops of the same frames, letters swaying)
+│           ├── studio-landscape.jpg / studio-portrait.jpg   (overview stills, from tools/studio-render)
+│           ├── studio-landscape.mp4 / studio-portrait.mp4   (6 s loops of the same frames: letters sway, record turns, candle flickers)
+│           ├── studio-music-{landscape,portrait}.jpg/.mp4   (music corner close-up still + loop)
+│           ├── studio-walk-{in,out}-{landscape,portrait}.mp4 (2 s camera walks between the shots)
+│           ├── studio-scene.json                             (cameras per shot and per walk frame, overlay anchors, the candle's light numbers)
 │           └── hero.png, react.svg, vite.svg         (unused template leftovers)
 ├── context/                     (this folder)
 └── .claude/skills/update/SKILL.md   (the /update skill that maintains this file)
@@ -672,6 +1029,13 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
   a photographic render, not a nicer drawing.
 - **They'll say "leave it blank, I'll decide how to fill it"** — when they do,
   build the empty stage well and don't invent contents.
+- **The studio is meant to feel like a simple game.** Items get pressed, the
+  camera walks up, the item is shown big enough to use. They describe placement in
+  metres relative to existing objects and think about what's visible from where
+  ("not directly behind it, but behind it so that the board is visible"). They
+  describe live data as game UI ("like how in a game when you hover over an item
+  it displays it above it"). They flag scope explicitly ("NOT NOW", "write that
+  into the plan as a maybe") — respect it and record it in Remaining work.
 - **They direct the studio like a set** ("push the chalk board back a little
   more, I want to see the light from the door poking over the top", "hang my
   name as individual letters off the ceiling lights"). Their frame of reference
@@ -698,9 +1062,44 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
   `tools/studio-render/index.html` and the JPEGs mid-task. Before a big edit to a
   file with uncommitted changes, check for peer sessions and whether the file
   changed since it was read; coordinate by message and build on what's on disk.
+- **They look at the studio on their real phone** (asked for the command to run
+  it there, then asked for changes based on what they saw). Treat the portrait
+  framing as a first-class view, and remember a change that hot-reloads reaches
+  their open phone tab immediately.
+- **They ask what a change costs before asking for it** ("would that take a full
+  40 minute render?"). Answer with what would re-render for which kind of change
+  and the time (see Render times), then do the cheapest version that gets what
+  they want. Prefer overlays (no render) for live or often-changing things.
+- **They leave prompts running unattended** (overnight on 2026-09-15; the PC then
+  crashed) and come back asking "what changed". The session transcripts in
+  `~/.claude/projects/C--StartUp-apps-my-website/*.jsonl` show the prompt and how
+  far it got; compare with file mtimes and `git status`, check nothing was left
+  half-written, then summarise and get the site running for them.
 - **They like adding small bits of life to scenes** (sleeping Snoopy's Zs
   earlier; now asking for floating Zs and music notes in the studio). Lay out how
-  it could work and ask what the source object is, rather than placing one.
+  it could work and ask what the source object is, rather than placing one. When
+  they *do* name the object, they name real things (a Carby Musk candle from Drake's
+  Better World Fragrance House): look up the actual product and model it from its
+  photos.
+- **"Zoom into the screen" = walking into the close-up** (the camera walk they once
+  asked to "zoom in"). They open the dev site while a long render is still running
+  and report what they see ("right now it [the candle] disappears") — during a
+  render, tell them up front which shots are still the old files and that the
+  overlays are off until `studio-scene.json` is written at the end.
+- **They care that the lighting is consistent, not just pretty**: "the candle doesn't
+  have to show, but it doesn't make sense if the light disappears". Lights in the
+  scene should be driven by where the source is, never by whether it's on screen, and
+  a light should reach everything they named (board, player, album art) even if that
+  means cheating its strength — say so when it's cheated.
+- **They want the site less grey.** The *Endless* look is black and white, but they
+  found greyscale-until-hover art "too gray" and asked for the candle's light to
+  bring the colours to life while keeping the hover pop. Colour motivated by a light
+  in the scene is welcome; keep hover effects noticeable when changing a base look.
+- **They ask "is it possible to…" before committing to a feature** (fetching the
+  music video from the song URL). Answer plainly — what's possible, the route, the
+  catches — and ask the one decision that's theirs (e.g. where it would play); don't
+  start building. A feature needing a new backend route falls under "the user writes
+  the backend".
 - Still learning Claude Code's own controls (asked how to stop a running prompt —
   **Esc**; triggered `/claude-api` by accident). Answer those briefly and plainly.
 - Dictates via voice-to-text, so messages can be garbled — read charitably

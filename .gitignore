@@ -19,8 +19,10 @@ npm-debug.log*
 
 # images
 *.png
+/pictures/
 tools/studio-render/preview-*.jpg
 tools/studio-render/preview-*.mp4
+tools/studio-render/preview-*.json
 
 # OS/editor
 .DS_Store
