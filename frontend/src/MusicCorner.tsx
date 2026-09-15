@@ -134,7 +134,7 @@ function Hotspot({ lens, onEnter }: { lens: Lens; onEnter: () => void }) {
   return (
     <button
       type="button"
-      className="music-hotspot"
+      className="studio-hotspot"
       style={{ left, top, width: right - left, height: bottom - top }}
       aria-label="Walk over to the record player and my top artists"
       onClick={onEnter}

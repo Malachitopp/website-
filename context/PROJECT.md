@@ -18,8 +18,14 @@ larger size that allows you to interact with it properly"** — "sort of like a 
 game but less complex". The first such item is the **music corner** (record player,
 top-artists board, now-playing hologram and album cover; built 2026-09-15), lit warm
 by a burning Carby Musk candle on a crate beside the board (added the same day — the
-one thing in the black-and-white hall with colour). Next planned, *later,
-not yet*: a computer you press to see all the user's projects and GitHub. The
+one thing in the black-and-white hall with colour). On the other side of the tagline
+board the user's dog sleeps on a small fleece-covered sofa (added 2026-09-15; rendered
+into the shots, breathing in the loops; not a clickable item yet). The second item is the
+**work station** (built 2026-09-15, the same afternoon): between the sofa and the tagline
+board, a tall crate of books with an open laptop on it (its screen shows GitHub's mark), a
+second Carby Musk candle burning beside it, and scribbled sheets of physics on the floor;
+press it to walk up (`/studio/laptop`) and the screen wakes to a home screen of shortcuts
+("all my links and academic stuff" — just GitHub so far, the user names the rest). The
 name + Spotify content that used to be the whole site still lives on its own page.
 
 ## Stack decisions made so far
@@ -197,6 +203,56 @@ name + Spotify content that used to be the whole site still lives on its own pag
 - **Watching render logs:** `render.mjs` prints progress with `\r`, and
   `tail -f log | tr '\r' '\n' | grep --line-buffered …` delivers nothing because `tr`
   buffers. Use `sed -u 's/\r/\n/g'`.
+- **One non-finite sample blackens most of a frame.** The first full render with two
+  candles came out black in a staircase from a few pixels down and to the right: post's
+  box blurs carry running sums along rows then columns, so one `Inf`/`NaN` pixel poisons
+  everything after it. The cause was the two-candle picker: `rnd()` is
+  `float(uint) / 4294967295.0`, which rounds to exactly 1.0 for the top 128 values, so a
+  candle with zero weight (out of reach) could still be picked and its zero share divided
+  by. Fixed (a zero-weight candle is never picked), and guarded twice so it can't recur:
+  the shader zeroes a sample whose sums aren't finite before adding them, and `mix()` in
+  post zeroes non-finite pixels (with a `console.warn`, which render.mjs prints). The tube
+  picker always had a `!found` guard for the same reason. Check a render's first still
+  by file size: a good 2400×1500 still is ≈ 450 KB, that bad one was 165 KB.
+- **A render overwrites the uncommitted assets in place**, so a bad run costs the last
+  good files (the sofa/dog overview still was lost to the black one above until the
+  re-render). Frame 0 of the matching loop MP4 is the same picture at video quality, if a
+  stand-in is ever needed. Commit renders promptly.
+- **The Write tool writes LF, the Edit tool keeps CRLF.** After writing a whole file,
+  convert with a Node one-liner (`s.replace(/\r?\n/g, '\r\n')`); `file` shows which it is.
+- **A thing drawn inside another's bounding slab must fit in it.** The laptop is traced
+  inside the crate's slab, whose top was `DESK_H + JAR_H + 0.04` (1.05 m) from the
+  candle-crate code it was copied from; the lid's top is at 1.11 m, so its top 6 cm never
+  rendered. The user spotted it from the site: "the screen extends upwards but the bezels
+  don't" — the overlay uses the true geometry (`anchors.laptopScreen`), so it showed the
+  screen where the render had cut the lid off. Now `DESK_H + 0.24`. The check that would
+  have caught it: draw the projected anchor quad on a peek (done since, `solve`/`peek`
+  scratch scripts) — the quad must sit *inside* a rendered bezel.
+- **A "black" surface next to a candle isn't black.** The laptop's bezel at albedo 0.05
+  rendered tan on the lid's top (lit by the candle 25 cm away; the jar's rim clears the
+  flame for the top of the lid but shades the bottom bezel, which stayed dark), so on the
+  phone the lid's top edge vanished against the floor and the dark home-screen overlay
+  looked like it stuck up past the lid — the user reported "the screen still protrudes
+  above the bezels" after the lid was fixed. Diagnosed by re-rendering a peek with the
+  bezel at albedo 0 (it went black, so the material path was right). Now 0.02: a dark
+  brown band, darker than the floor, lighter than the screen glass. The overlay got the
+  same warm wash the render's screen has (`.home-screen::after` / `.lock-screen::after`
+  in Studio.css) so it doesn't look cut out of the picture.
+- **`yawWorld(pos, c, s, [x, y, z])` takes y as it is** (it ignores `pos[1]`; every crate
+  and board has its origin on the floor). Passing the jars' origins (at crate-top height)
+  with flame heights relative to them put both candles' loop patches at floor level, so
+  the flames were not re-rendered in that run's loops (only post's brightness flicker
+  moved). Caught from `--stats`/the peek's `patches` list: a close-up of a candle listed no
+  patch for its flame. Put the height into the corners, not the origin.
+- **Vite reloads the studio page whenever a render rewrites an imported asset**, so a
+  headless-Chrome check run while a render is writing files can be cut mid-flow. But the
+  timeouts seen in the scratch `site.mjs` check on 2026-09-15 were the check's own
+  race: right after Escape, `location` is already `/studio`, the laptop screen is
+  already unmounted and `.is-walking` isn't set until the walk video *plays*, so a
+  "settled" test on those three passed during the setting-off gap and the click on the
+  music hotspot found no button. A settled test must also require a hotspot to exist
+  (or `.studio` not to have `is-setting-off`). A half-second-by-half-second state probe
+  (`chain-probe.mjs` in the scratchpad) showed every walk arriving on time.
 
 ## Schema philosophy (important, keep revisiting this)
 - **No `users` table** — single-user site. Auth for write actions (uploading art,
@@ -302,7 +358,7 @@ name + Spotify content that used to be the whole site still lives on its own pag
   the cream cross-fades into the studio photo. Reduced motion → straight
   `navigate`. Modified clicks fall through to the browser.
 
-### `/studio` and `/studio/music` — `Studio.tsx` + `Studio.css` (the warehouse)
+### `/studio`, `/studio/music` and `/studio/laptop` — `Studio.tsx` + `Studio.css` (the warehouse)
 - **Shots.** Each shot (`overview` = the view from the door, `music` = the
   close-up of the music corner) is a `<picture>` still (`<source media=
   "(orientation: portrait)">` for the portrait render) with a seamless 6 s loop
@@ -315,22 +371,31 @@ name + Spotify content that used to be the whole site still lives on its own pag
   portrait renders rather than crops. Whole-frame videos rather than patches over
   the JPEG: a patch would need sub-pixel alignment under `object-fit: cover`, and
   browsers scale and colour-convert `<video>` and `<img>` differently.
-- **Walking between shots (added 2026-09-15).** The URL is the truth: clicking
-  the corner calls `navigate('/studio/music')`; a state machine in `Studio`
-  (`view` = the settled shot, `walk` = `{ to, framing, playing, ended }`, adjusted
-  *during render* — React's pattern for following an outside change — so the
-  `set-state-in-effect` lint rule stays happy) starts a walk whenever the path and
-  the settled view disagree. One persistent `<video class="studio-walk">` always
-  has the *next* walk from here as its `src` with `preload="auto"`, so it's loaded
-  before it's wanted; on a walk it `play()`s, stays `opacity: 0` until `playing`
-  (then covers everything and `view` switches underneath), and on `ended` waits
-  for the destination still's `onLoad` before letting go. If it can't play, or
-  isn't playing after 4 s, it cuts straight there (`cursor: progress` meanwhile).
-  The loop of a shot is only mounted while settled. Leaving: "← back" (and
-  Escape) in the close-up call `history.back()` if we walked in from `/studio`,
-  else `navigate('/studio')`; browser back/forward walk too. A rotated phone
-  mid-walk skips to the destination. `prefers-reduced-motion`: no loops, no walks,
-  just a cut (the still fades in over 0.35 s), static notes.
+- **Walking between shots (added 2026-09-15; three shots since the laptop).** The
+  URL is the truth: clicking an item calls `navigate('/studio/music')` or
+  `navigate('/studio/laptop')` (`PATHS` maps paths to the `CloseUp`s); a state
+  machine in `Studio` (`view` = the settled shot, `walk` = `{ from, to, framing,
+  playing, ended }`, adjusted *during render* — React's pattern for following an
+  outside change — so the `set-state-in-effect` lint rule stays happy) starts a walk
+  whenever the path and the settled view disagree. **Every walk starts or ends at
+  the overview**: from one close-up to the other it walks out first, settles, then
+  the next render sees the path still disagrees and walks in (two walks, no special
+  case). There is one persistent `<video class="studio-walk">` *per close-up*
+  (`walkRefs`), each holding the next walk you could take with that close-up from
+  here (out of it if you're there, else in to it) with `preload="auto"`, so both
+  possible walks from the overview are loaded before they're wanted; the one for the
+  walk in progress (`walkShot(walk)`) `play()`s, stays `opacity: 0` until `playing`
+  (then covers everything and `view` switches underneath), and on `ended` waits for
+  the destination still's `onLoad` before letting go. If it can't play, or isn't
+  playing after 4 s, it cuts straight there (`cursor: progress` meanwhile). The loop
+  of a shot is only mounted while settled. Leaving: "← back" (and Escape) in a
+  close-up call `history.back()` if we walked in from `/studio`, else
+  `navigate('/studio')`; browser back/forward walk too. A rotated phone mid-walk
+  skips to the destination. `prefers-reduced-motion`: no loops, no walks, just a
+  cut (the still fades in over 0.35 s), static notes, the laptop's home screen
+  without its wake-up. Checked in headless Chrome on 2026-09-15: overview → laptop
+  → Escape → overview → music → (pushState to /studio/laptop) → out and in again,
+  on a 1920×950 window and a 390×844 phone, no console errors.
 - **Overlays follow the camera frame by frame.** While a walk plays,
   `requestVideoFrameCallback` (rAF + `currentTime` fallback, both in `followFrames()`)
   gives the presented frame's `mediaTime`; `round(mediaTime × fps)` indexes the
@@ -339,10 +404,13 @@ name + Spotify content that used to be the whole site still lives on its own pag
   another effect runs `followFrames` on whichever video is on screen (the walk, or
   the settled shot's loop via `loopRef`) and writes `--flicker` =
   `candleFlicker(scene time)` straight onto `.studio`'s style (no React state).
-  Scene time: overview loop = `mediaTime`, close-up loop = `walk.seconds +
-  mediaTime`, walk in = `mediaTime`, walk out = `mediaTime − walk.seconds` — the same
-  times the renderer used for those frames. No video (reduced motion, or still
-  loading) → the still's moment.
+  Scene time: overview loop = `mediaTime`, close-up loop = that close-up's walk
+  `seconds + mediaTime`, walk in = `mediaTime`, walk out = `mediaTime − seconds` —
+  the same times the renderer used for those frames (music walks are 2 s, the
+  laptop's 2.6 s: `scene[framing].walks[shot].seconds`). No video (reduced motion,
+  or still loading) → the still's moment. Only the music candle's flicker is
+  followed (`scene.candle.flicker`): the overlays it lights are all in the music
+  corner; the work station's candle flickers on its own in the render.
 - **`studioScene.ts`** — types for `assets/studio-scene.json` (written by the
   renderer) and the projection maths, identical to the shader's camera: a point
   lands at `(w/2 + k·(v·right)/z, h/2 − k·(v·up)/z)` with `k = coverScale ×
@@ -397,9 +465,11 @@ name + Spotify content that used to be the whole site still lives on its own pag
     faint glow on hover); clicking the hologram there walks in too.
   - *Candlelight on the overlays* (2026-09-15): the user wanted the candle to light
     "all the album arts", which are HTML. `candleWarmth(point, normal)` in
-    `studioScene.ts` works out the candle's light the way the shader does (strength,
-    soft fall-off, facing, and how much of the flame clears the jar's rim from that
-    point, from `scene.candle.jar`) against `TUBE_LIGHT = 0.45` (the tubes' light on an
+    `studioScene.ts` works out each candle's light the way the shader does (strength,
+    soft fall-off, the fade over the last 40 % of its reach, facing, and how much of
+    the flame clears its jar's rim from that point, from `scene.candle.jars`), summed
+    over both candles since 2026-09-15 (the work station's adds a little to the music
+    board's left prints from 5 m away), against `TUBE_LIGHT = 0.45` (the tubes' light on an
     upright surface there: 0.18 direct, integrated in a scratch script exactly as
     `directLight` does, plus about as much bounced), giving the share of the light
     that's the candle's (≈ 0.41 on the left print → 0.87 on the right one, 0.29 on the
@@ -421,6 +491,27 @@ name + Spotify content that used to be the whole site still lives on its own pag
     sense if the light disappears"): the glow on the board/player is in the render, and
     `--warm` comes from the candle's position — verified in a 1000×980 window where the
     candle is half cropped off the right edge.
+- **`Workstation.tsx`** (2026-09-15) — the laptop's live part, in its own
+  `.studio-overlay`:
+  - *The screen*: mounted only while settled at `/studio/laptop` (`focused`). A
+    1192×745 px element (4 px = 1 mm of the 298×186 mm screen inside the bezel)
+    laid onto `anchors.laptopScreen` with `planeTransform`. It holds a `.lock-screen`
+    (the same dark screen and GitHub mark the render shows, drawn again exactly over
+    it) that fades and scales away after 0.4 s, and under it the `.home-screen`
+    that wakes: the studio's own overview still as a dimmed wallpaper, a menu bar
+    ("malachi's laptop", a live clock updated every 10 s), and desktop-style
+    shortcut tiles from the `SHORTCUTS` list — **GitHub only**
+    (`https://github.com/Malachitopp`), the user names the rest — each an `<a
+    target="_blank">` with the mark on a rounded tile and a label. **Sizing**: `--px`
+    on the screen element = how many real px one of its px is at the close-up
+    (from the projected width of the screen's top edge), and every size in the home
+    screen is `calc(Npx / var(--px))`, so tiles are 84 real px and labels 12 real px
+    on a 1920×950 window (screen ≈ 728 px wide) and on a 390×844 phone (≈ 241 px
+    wide) alike. Verified with the screen outlined: it sits exactly on the rendered
+    screen.
+  - *Hotspot*: from the overview a transparent `<button>` (`.studio-hotspot`, the
+    class the music corner's uses too) over the projected box of `anchors.workstation`
+    — crate, laptop, candle and papers — "Walk over to the laptop and my links".
 - **`spotify.ts`** — `useNowPlaying()` and `useTopArtists(range)` (returns
   `{ artists, latest }`: the list for this range or null while loading, and
   whatever loaded last), shared by the studio and the Spotify page.
@@ -455,6 +546,103 @@ name + Spotify content that used to be the whole site still lives on its own pag
   glass, gold printing, and warm yellow light (`CANDLE_RGB` 1, 0.76, 0.42). On screen it
   is small (≈ 35 px wide in the 2400 px close-up): the label reads as gold specks, the
   flame as a bright point with a halo.
+  **The sofa and the dog (added 2026-09-15).** The user asked for their dog "on a
+  chair, just to the left of the chalk board, sleeping how he does in the pictures …
+  like a chair sofa, in fact you can even render the sofa from the pictures … he would
+  sleep on the edge propping his head up like that". The pictures are three JPEGs in
+  `pictures/` at the repo root (gitignored via `/pictures/`): a black schnauzer-type
+  dog with a beard, folded ears and greyer legs — on a bed with his head propped on a
+  fleece pillow and a paw over it, standing in snow, and lying on the user's grey
+  fleece-covered two-seater with his front paws over the front edge. "The chalk board"
+  was read as the *tagline* board (the music board's left is the record box). Modelled
+  as one signed distance field sphere-traced in the sofa's frame (`sofaSDF`, `dogSDF`,
+  `sofa()` in the shader; rounded boxes, ellipsoids, capsules and polynomial `smin`,
+  normals from the gradient, roughened for fleece and a wiry coat): a 1.64 m loveseat in
+  a fleece cover (base to the floor, seat cushion with a lip, rolled arms topping out at
+  0.675 m, back leaning 8° with a roll along its top, two back cushions, a patterned
+  square pillow and a fluffy one in the left corner) at `SOFA_POS (-2.35, 0, 11.1)`
+  yawed −16° — its right arm ≈ 0.6 m left of the board's left leg, its front a little
+  ahead of the board's face, like the record box on the other side. The dog lies along
+  the seat at 30° (`DOG_POS`), back end by the pillows, chest at the front-right corner,
+  chin on the right arm (`HEAD_C`, nose pointing at the board), near front paw hanging
+  over the front edge, far one along the seat by the arm, near hind leg sprawled flat
+  with the foot beside his belly, a short tail on the cushion. Head: a dome flattened on
+  top, capsule muzzle, a deep block of beard, two brow tufts, ears folded down the sides
+  with a ridge at the fold, a nose. Materials `M_SOFA` (fleece, albedo 0.48), `M_PILLOW`
+  (cream with a grey print), `M_DOG` (0.055, beard/brows/legs a shade greyer as in the
+  snow photo), `M_NOSE`; all grey, so the black-and-white look is untouched. **He
+  breathes in the loops**: `uBreath` swells the ribs, two breaths per 6 s loop, ±4.5 %;
+  `dogBox` is a loop patch (≈ 185×130 px in the landscape overview, so cheap). In the
+  overview he is ≈ 70 px long: a black dog on a grey sofa, head up on the arm, no more
+  detail than that; the model was judged in close-up scratch renders (a `peek.mjs` in the
+  session scratchpad with `sofa`/`dog`/`side`/`face` cameras — worth recreating for any
+  change to him). Sphere tracing needed 192 steps and a 3 mm "near enough" acceptance
+  when it runs out, otherwise rays creeping along a silhouette missed and the bright sofa
+  showed through his outline. `anchors.sofa` (box corners) and `anchors.dogHead` are in
+  the scene JSON for a hotspot or Zs one day; nothing on the site reads them yet. Only
+  the overview stills/loops and the walks were re-rendered (`--only overview,walk`): the
+  sofa is 47°/53° outside the landscape/portrait close-up frames, so the music files
+  are unchanged.
+  **The work station (added 2026-09-15).** The user asked for "a little wooden table
+  with a laptop on it … to the right of my dog … towards the left side of the chalk
+  board … a little taller than the other wooden blocks, like the one with the vinyl
+  player since it'll resemble me standing at the chalk board with the laptop open …
+  the laptop screen should display the github logo … inside of the storage
+  containers should be books … scribbled paper on the floor with arbitrary sketches
+  of system design and equations like the dirac equation, or matrices from special
+  relativity … without covering my dog up", then mid-turn "add another candle, same
+  as the one in the music section, and have the same lighting effects". Placement:
+  the sofa's front-right corner is at (−1.41, 10.88) and the board's left post at
+  (−1.03, 11.9), so the crate stands at `DESK_POS (−1.15, 0, 11.3)` yawed −25°
+  (`DESK_C/S`; its front turned a little right, towards the board and the door), 0.35 m
+  in front of the post, 0.23 m from the sofa's corner; in the landscape overview it
+  spans x ≈ 1030–1090 of 2400 between the sofa's arm (ends ≈ 1024) and the board's
+  post (1082), 35 px clear of the dog's head (990). A plywood crate like the candle's
+  but 50 × 40 × 90 cm (`DESK_HW/HD/H`; wider than first planned so the jar fits beside
+  the laptop), stood on end, open to the front, two shelves (`DESK_S1/S2`): books on
+  every shelf — four rows standing spine-out (`DBOOK`, spines shaded per book with a
+  paler title band, page edges pale along the top), three flat in a stack at the
+  bottom, one flat on the top shelf, and one leaning 28° from the middle row to the
+  crate's side (`DBOOK_LEAN`). On top: the **laptop** (a 14" machine at `LAP_C`, base
+  31 × 21.6 × 1.6 cm with 4 mm rounded corners, lid 20.6 cm tall open 110° i.e. leaning
+  back 20° — `LID_C/S` — on a hinge along the base's back; sphere-traced as an SDF
+  of two rounded slabs, `laptopSDF`; brushed aluminium 0.5, a black bezel, a keyboard
+  of black keys in a dark well and a trackpad drawn in albedo by position), the
+  **second candle** (the same `jar()` at `DESK_JAR (−0.175, 0)`, i.e. the laptop's
+  *left*; it was first put on the right and flooded the tagline board's slate so the
+  chalk was unreadable in the overview — on the left it is 1 m from the slate's end
+  and the laptop's lid shadows the lower left of the board from it; the warm light
+  on the board's left end now mirrors the music board's right), a pencil in front of
+  the jar (`M_PENCIL`), and an A4 sheet half under the laptop's front edge. **The
+  screen** (`M_SCREEN`, inside `BEZEL_X/LO/HI`, 298 × 186 mm = 16:10) is *light*:
+  `screenLight()` adds `SCREEN_LE (0.9) × texture^2.2` to the path's radiance on every
+  bounce and the surface goes on as dark matt glass (albedo 0.012 — at 0.04 the candle
+  30 cm away washed it gold), so the mark glows and blooms a little; `uScreen` is a
+  1600×1000 canvas (`screenTexture()`: `#111` with GitHub's octicon mark, the
+  `GITHUB_MARK` path, 36 % of the height, in `#f4f4f4`; neutral grey, not GitHub's
+  navy, to keep the hall black and white). **The papers** (`PAPER`: x, z, yaw, drawing;
+  `PAPER_HW/HL/T`, 0.3 mm thick boxes turned to their yaws, laid one over another by
+  index where they overlap): four on the floor round the crate's feet — one beside
+  the sofa's arm, two in front, one further out — and the one on the desk. Their
+  drawings are `uPaper`, a 2×2 atlas of A4 sheets at 3 px/mm (`paperTexture()`,
+  pencil in white on black, red = ink): the Dirac equation boxed with its γ matrices,
+  `{γ^μ, γ^ν} = 2η^μν`, `E = ±√(p²c² + m²c⁴)` → "antimatter!", a crossed-out
+  wrong-sign version, "spin ½"; a Lorentz boost along x as a 4×4 matrix with
+  `γ = 1/√(1 − β²)`, `η = diag(+, −, −, −)`, `x'^μ = Λ^μ_ν x^ν`, `ds²`, and a light-cone
+  sketch; a system design (client → CDN → load balancer → api ×3 → cache/postgres,
+  queue → worker, "stateless!", "ttl 10 s", "idempotent", "retry w/ backoff"); and a
+  sequence diagram of this site's now-playing fetch (browser → api → spotify) with
+  `iħ ∂ₜψ = Ĥψ`, `[x̂, p̂] = iħ`, `∂_μ F^μν = μ₀ J^ν`, `∇·B = 0`. Handwriting is "Segoe
+  Print" (has Greek); lines wander with a seeded jitter; `write()` handles `^{}` and
+  `_{}`; `matrix()` draws square brackets. From the overview the sheets are light
+  slivers on the floor; the laptop close-up can't see the floor (the camera looks
+  down 28° at the laptop), which is why one sheet is on the desk. Materials `M_LAPTOP`,
+  `M_SCREEN`, `M_DBOOK`, `M_PAPER`, `M_PENCIL`; `M_WOOD` now picks the nearest of three
+  crates. `anchors.laptopScreen` (the screen's corners, from `LAP_C`, `HINGE_Z`,
+  `LID_C/S` and the bezel), `anchors.workstation` (a box round all of it) and
+  `candle.jars[1]` are in the scene JSON. Judged in scratch peeks (a `peek.mjs` in the
+  session scratchpad like the dog's, taking a JSON of cameras; worth recreating) and
+  the two full-resolution stills above.
 - **History (don't re-propose):** the first version was a hand-drawn colour SVG
   cartoon of the user's actual bedroom (from their photo `IMG_2886.jpeg`: green
   bed, wall of paintings, desk with monitor/laptop/white PC, mesh chair). The user
@@ -471,25 +659,55 @@ name + Spotify content that used to be the whole site still lives on its own pag
   `w`, `h`, `spp`, `row`), waits for `window.studio` and calls its API over the
   DevTools protocol: `still({camera, time, exposure})`, `loopFrame(i, n)`,
   `frame({camera, time, spp, exposure})`, `info()` (GPU, loop length, anchors, and
-  `candle`: flicker, strength, soft, rgb, jar), plus debug `letters()` /
-  `board(writing)` / `grade(changes)` + `regrade()` (re-grade the last still without
-  rendering). Cameras are `{ pos, target, fov }`
+  `candle`: flicker, strength, soft, reach, rgb, radius, jars), plus debug
+  `letters()` / `board(writing)` / `screen()` / `paper()` / `grade(changes)` +
+  `regrade()` (re-grade the last still without rendering). Loop patches: the
+  letters' box, the record, each candle's flame (`candleBoxes`) and the dog's chest,
+  wherever they are in view — so the laptop close-up's loop has just its flame. Cameras are `{ pos, target, fov }`
   (vertical fov; `lookAt` with no roll). `--only none` renders nothing and just
   rewrites `studio-scene.json` from `info()` (about 10 s). Run from the repo root:
   - `node tools/studio-render/render.mjs` → for each framing (landscape
     2400×1500 / portrait 1170×2340) into `frontend/src/assets/`:
     `studio-<framing>.jpg/.mp4` (overview, 1024 spp, 144-frame loop),
-    `studio-music-<framing>.jpg/.mp4` (close-up), `studio-walk-in-<framing>.mp4`
-    and `studio-walk-out-<framing>.mp4` (2 s at 30 fps = 61 frames, 512 spp, at
-    ⅔ resolution, CRF 24), then `studio-scene.json`. Options: `--stills` (no
-    videos), `--only overview,music,walk`, `--framing landscape|portrait`,
-    `--frames N` (loop frames), `--walk-fps N`, `--debug board|letters`,
-    `--stats`. A walk needs both stills' exposures (taken from the run, or from
-    the existing scene JSON when using `--only walk`).
+    `studio-music-<framing>.jpg/.mp4` and `studio-laptop-<framing>.jpg/.mp4` (the
+    close-ups, each with its loop), `studio-<shot>-walk-in-<framing>.mp4` and
+    `studio-<shot>-walk-out-<framing>.mp4` (music 2 s = 61 frames, laptop 2.6 s =
+    79 frames, at 30 fps, 512 spp, ⅔ resolution, CRF 24; the music walks were
+    renamed from `studio-walk-in/out-<framing>` when the laptop came), then
+    `studio-scene.json`. The close-ups are the `CLOSE_UPS` table (`{ music: {
+    seconds: 2 }, laptop: { seconds: 2.6 } }`) — a new item is a camera per framing
+    and an entry there. Options: `--stills` (no videos), `--only
+    overview,music,laptop,walk` (`walk` = every walk, `walk-music` / `walk-laptop`
+    one of them, `none` = just the JSON), `--framing landscape|portrait`, `--frames
+    N` (loop frames), `--walk-fps N`, `--debug board|letters|desk` (desk = the
+    screen and paper textures), `--stats`. A walk needs the overview's and its
+    close-up's exposures (taken from the run, or from the existing scene JSON when
+    using `--only walk`).
+  - **`studio-scene.json` shape (changed 2026-09-15 for the laptop):** top level
+    `loopSeconds`, `walkFps`, `anchors`, `candle` (`flicker`, `strength`, `soft`,
+    `reach`, `rgb`, `radius`, `jars: [{ flame, rim, light }]` — index 0 the music
+    candle, 1 the work station's), and per framing `{ size, exposure: { overview,
+    music, laptop }, overview, music, laptop, walks: { music: { seconds, fps,
+    cameras[] }, laptop: {...} } }`. The old top-level `walk` and per-framing `walk[]`
+    are gone (`delete scene.walk` in render.mjs drops it from a previous file).
   - **Shots** (in `render.mjs`, metres): overview `pos [0, 1.6, 0]` looking down
     +z (fov 58 landscape / 80 portrait); music close-up landscape `pos [2.0, 1.6,
     6.0] → target [2.451, 1.05, 9.936]`, fov 30.47; portrait `pos [1.6, 1.6, 6.0] →
-    [2.67, 1.233, 9.837]`, fov 51.53. **Re-aimed again for the candle (2026-09-15)**
+    [2.67, 1.233, 9.837]`, fov 51.53; **laptop close-up** (2026-09-15) landscape
+    `pos [-0.764, 1.4, 10.708] → [-1.6966, 0.4231, 12.1826]`, fov 30.75; portrait
+    `pos [-0.739, 1.56, 10.609] → [-1.5424, 0.4413, 12.0592]`, fov 52.23. Solved the
+    same way (a scratch `solve.mjs`: a standing point in the crate's frame in front
+    of and 28° above the laptop, 0.85 m off for landscape and 1.0 m for portrait; the
+    aim re-centred on the must-see points' projected extents and the narrowest fov
+    that keeps them inside every `cover` crop, aspect 1.4–2.1 / 0.44–0.6, 4 %
+    margin). Must-see: the laptop's base and lid corners, and the whole jar with its
+    flame on landscape; on portrait only the jar's axis and flame, so the jar's far
+    side may go off the edge on the narrowest phones but the laptop stays big
+    (screen ≈ 240 px wide on 390×844 instead of 179). The crate's front edge was
+    dropped from the set: with it the fov went to 42°/67° and the screen shrank a
+    third. Result: screen ≈ 715 px wide on a 1920×950 window. The walk in passes
+    close by the sleeping dog on the sofa (he fills the left of the frame for a few
+    frames), which reads as walking past him. **Re-aimed again for the candle (2026-09-15)**
     with the same kind of solver, adding the candle's crate (with the flame) to the
     must-see points: landscape turned right a little at about the same size (slate
     ≈ 660 px on 1920×950); portrait had to widen (fov 47 → 51.5, slate ≈ 288 → 259 px on
@@ -511,16 +729,19 @@ name + Spotify content that used to be the whole site still lives on its own pag
     on a 1600×900 window) — the user chose seeing the whole board. Both
     close-ups are longer lenses than the overview, so the walk also zooms (the user
     literally asked for the camera to "zoom in").
-  - **Walks** (`walk()` in `render.mjs`): 2 s, smootherstep ease for the body, the
-    head (yaw/pitch interpolated, not the target point) turning a little ahead,
-    fov interpolated, a 1.8 cm head bob over 4 steps, exposure interpolated in log
-    space between the two stills'. Time keeps running forwards both ways and each
-    walk ends on exactly the moment of the still it arrives at: in runs t = 0 → 2
-    s (the music still is rendered at t = 2), out runs t = −2 → 0 (the overview
-    still). The record turns 3 times per 6 s loop = once per 2 s, so the spin
-    matches at both ends too; only the letters can jump a few degrees when a walk
-    in starts at an arbitrary moment of the overview loop. The per-frame cameras
-    go into the scene JSON for the overlays.
+  - **Walks** (`walk()` in `render.mjs`): 2 s to the music corner, 2.6 s to the
+    laptop (it is nearly twice as far from the door; `CLOSE_UPS[shot].seconds`),
+    smootherstep ease for the body, the head (yaw/pitch interpolated, not the target
+    point) turning a little ahead, fov interpolated, a 1.8 cm head bob over 2 steps
+    per second, exposure interpolated in log space between the two stills'. Time
+    keeps running forwards both ways and each walk ends on exactly the moment of
+    the still it arrives at: in runs t = 0 → seconds (a close-up's still is rendered
+    at its walk's seconds), out runs t = −seconds → 0 (the overview still). The
+    record turns 3 times per 6 s loop = once per 2 s, so the spin matches at both
+    ends of the music walks; the laptop can't see the record, so its 2.6 s doesn't
+    matter there. Only the letters (and the flames' flicker phase) can jump a little
+    when a walk starts at an arbitrary moment of a loop. The per-frame cameras go
+    into the scene JSON for the overlays.
   - `--preview` (64 spp stills, 32 spp walks, 960×600 / 390×780) writes
     `preview-studio-*` next to the script (gitignored, with `preview-*.json`); add
     `--frames 24` / `--walk-fps 12` for rough videos. Workflow: edit → preview →
@@ -542,6 +763,33 @@ name + Spotify content that used to be the whole site still lives on its own pag
     `+faststart`, no audio; CRF 20 for loops, 24 for walks. The grain seed is
     fixed, so the grain is identical in every frame: that is what keeps the loops
     small (only the patches change between frames).
+  - **Render times with the work station and two candles (RX 6950 XT, evening of
+    2026-09-15, everything): ≈ 2 h 30 min per full run** (four were started that
+    evening: the first was black from the non-finite bug, the second had the clipped
+    lid and the flames not re-rendered, the third the glare, the fourth was cut at the
+    portrait walks for the bezel; then `--only laptop,walk-laptop --framing landscape`
+    and `--only laptop,walk --framing portrait` for the bezel). Stills 17–36 s (the
+    laptop close-up longest: its SDF and the candle fill the frame). Loops: landscape
+    overview 1010 s, music 414 s, laptop 1554 s with the old `dogBox` and 948 s with
+    the tightened one (see Remaining work); portrait overview 753 s, music 356 s,
+    laptop 299 s. Walks: landscape music 355 s each (61 frames), laptop 620–640 s
+    (79 frames); portrait music 268 s, laptop 452 s. Exposures: landscape 1.869 /
+    1.828 / 1.750, portrait 1.979 / 1.937 / 1.832 (overview / music / laptop). Sizes:
+    landscape overview 0.45 MB + 1.57 MB loop, music 0.45 + 1.41, laptop 0.41 + 1.36,
+    music walks 1.06 + 1.05, laptop walks 1.53 + 1.57; portrait overview 0.34 + 1.12,
+    music 0.33 + 0.98, laptop 0.33 + 1.04, music walks 0.74 + 0.71, laptop walks
+    1.14 + 1.15; the scene JSON is 132 KB now (two walks per framing). A landscape
+    visit that walks to the laptop and back is ≈ 6.9 MB. **Where a run dies the JSON
+    keeps the previous exposures**; the fourth run's overview and music exposures
+    were written into it by hand before the partial re-render, so the walks ramp from
+    the right level.
+  - **Render times with the sofa and the dog (RX 6950 XT, 2026-09-15, `--only
+    overview,walk` for both framings: 44 min wall clock):** stills 18 s landscape / 14 s
+    portrait; overview loops 859 s / 642 s (were 644 / 485 — the sofa's sphere tracing
+    costs about a third more where rays reach it); walks 310 + 308 s landscape, 226 +
+    228 s portrait. Exposures 1.862 / 1.966 (the sofa hardly moves the median). Sizes
+    unchanged within a few KB (landscape overview 0.45 MB + 1.55 MB loop, portrait
+    0.34 + 1.12). The music close-ups were not re-rendered (see the sofa bullet).
   - **Render times with the candle (RX 6950 XT, 2026-09-15): full render ≈ 50 min**
     (48 min of rendering): stills 11–17 s; overview loops 644 s landscape / 485 s
     portrait; close-up loops 409 / 354 s; walks ≈ 260 s each landscape, ≈ 196 s
@@ -697,14 +945,31 @@ name + Spotify content that used to be the whole site still lives on its own pag
 - **Colour, and the candle's light kept apart (2026-09-15).** Until the candle the
   path tracer carried one luminance per pixel and the JPEGs were greyscale; a yellow
   light needs colour, so it is now RGB throughout (`surface()` gives each material a
-  colour — grey `vec3(albedo())` for everything but the jar and wax). The shader
-  writes **two float targets per ping-pong buffer** (MRT, `layout(location = 0/1)`,
-  `drawBuffers`): target 0 = light from the tubes and door (rgb) + the flame seen
-  straight on (a); target 1 = light from the candle (rgb, `CANDLE_RGB` baked in).
-  Clear colour is `(0,0,0,0)` — alpha is a sum now. `mix()` in post adds them:
-  tubes' light as is + candle × `grade.candle` × `flicker(t)`, and the flame goes in
-  **after** the firefly clamp (a few-pixel flame is exactly what the clamp removes),
-  with its own halo blur. Every step after exposure runs per channel with the same
+  colour — grey `vec3(albedo())` for everything but the jars and wax). The shader
+  writes **three float targets per ping-pong buffer** (MRT, `layout(location =
+  0/1/2)`, `drawBuffers`; texture units 0, 4 and 8 for the previous sums): target 0
+  = light from the tubes and door (rgb); target 1 = light from the music candle
+  (rgb, `CANDLE_RGB` baked in) + its flame seen straight on (a); target 2 = the same
+  for the work station's candle. (Two candles since 2026-09-15: the second got its
+  own channel so post can flicker each on its own — `FLICKERS[1]` is the same
+  sines at phases shifted 2.7 rad, and its flame has its own sway in `uFlame[1]`.)
+  **The work station's candle is graded at `candle2 = 12`, the music one at 22** (user,
+  2026-09-15, of the overview: "make the glare on the theoretical physics ever so
+  slightly less, it's quite hard to read the white text on a glared blackboard"). At 22
+  the candle a metre from the slate lit its left half to a bright band; a `regrade`
+  comparison of 22 / 16 / 12 / 9 on one 2400×1500 still (a scratch `regrade.mjs`:
+  render once, `grade({ candle2 })` + `regrade()` per value, crop the board) showed 12
+  keeps the chalk readable with a warm tint left on the slate and the desk still lit.
+  Each jar's own strength is in `candle.jars[i].strength` for the site. The flames
+  themselves (`grade.flame`) look the same on both.
+  The shader picks *one* candle per shading point (`pickCandle`: chance ∝ its
+  1/(d² + soft²) × reach fade, the answer divided by that chance; a candle with no
+  weight is never picked, see config bugs) and its channel gets the light; the
+  jars' `jarGlow` goes to the nearer jar's channel; both flames' `flameGlow` are
+  summed on the first bounce. Clear colour is `(0,0,0,0)` — alpha is a sum now.
+  `mix()` in post adds them: tubes' light as is + each candle × `grade.candle` ×
+  its `flicker(t, i)`, and the flames go in **after** the firefly clamp (a
+  few-pixel flame is exactly what the clamp removes), with one halo blur. Every step after exposure runs per channel with the same
   curve, so grey pixels come out exactly as the black-and-white look had them; grain
   is the same random value on all three channels. Auto-exposure is judged on the
   tubes' light only, so tuning the candle never moves it. `studio.grade({...})` +
@@ -765,25 +1030,31 @@ name + Spotify content that used to be the whole site still lives on its own pag
   backend `tsc --noEmit` passes.
 
 ## Remaining work
-- **Next studio item — LATER, NOT NOW (user, 2026-09-15): a computer** you press
-  to walk up to, showing all the user's projects and GitHub. Same recipe as the
-  music corner: model it into the shader (with anchors for its screen), add a shot
-  + walks in `render.mjs`, then an overlay component that lays the "screen" HTML
-  onto the monitor with `planeTransform`. `Studio`'s state machine is written for
-  two shots; a third means walks between any pair (or always via the overview) and
-  a `view` per path (e.g. `/studio/computer`). Don't start it until they ask. The
-  user still decides what else goes in the studio; don't populate it unprompted.
+- **More shortcuts on the laptop's home screen** (user, 2026-09-15: "all my links
+  and academic stuff … The first shortcut can just be my github and that's it for
+  now"). Each is an entry in `SHORTCUTS` in `Workstation.tsx` (name, href, an SVG
+  path for the tile); no render needed. The user names them. The user still decides
+  what else goes in the studio; don't populate it unprompted. A fourth item is now
+  a camera per framing + a `CLOSE_UPS` entry in `render.mjs`, a `CloseUp` in
+  `studioScene.ts`, its assets/`SHOTS` entry and `PATHS` route in `Studio.tsx`, and
+  an overlay component.
 - **MAYBE, low priority (user, 2026-09-15: "I don't believe it's important, it
   renders fine on my screen"): swipe to look around on phones.** When the render
   is wider than the screen, let the user swipe left/right to move the view "sort
   of like a video game but less complex". Must not bring back black bars (see
   config bugs). Would likely be a horizontal pan of the covered image (and the
   overlays with it) rather than a scroll container.
-- **Floating Zs (snoring) — still an open question for the user.** Nothing in the
-  studio sleeps yet; don't invent what snores. The music notes were done as the
-  recommended overlay (see `MusicCorner`), and Zs would work the same way.
-  Remember inline SVG needs `overflow: visible` for things that drift past the
-  viewBox.
+- **Floating Zs (snoring) — now has a sleeper: the dog on the sofa (2026-09-15),
+  but not asked for since.** If wanted: an overlay like the music notes (see
+  `MusicCorner`'s `Notes`), rising from `project(lens, scene.anchors.dogHead)`, sized
+  by px-per-metre there. Remember inline SVG needs `overflow: visible` for things
+  that drift past the viewBox.
+- **The dog as an item (maybe, not asked for):** the studio's idea is things you walk
+  up to, and `anchors.sofa` is there for a hotspot. A close-up would need a camera in
+  `render.mjs` and `Studio`'s two-shot state machine generalised (see the computer
+  bullet). The model holds up at about a metre, but before investing in that shot ask
+  the user for a photo of him actually asleep (all three photos have him awake) to get
+  the pose right; the user offered more photos.
 - **Music corner polish, if the user wants it:** the notes always float (the
   record always spins in the renders) even when nothing is playing — they could
   be hidden then, but the spin is baked into the loop. The hologram is tinted cyan
@@ -815,12 +1086,26 @@ name + Spotify content that used to be the whole site still lives on its own pag
   the scene) — which matters for putting it *in* the studio, especially on phones;
   the API key stays server-side. **Open question put to the user: where it plays** —
   in the hologram, on something new like a TV, or in a pop-up from the album cover.
-- **Commit the studio work**: everything above from 2026-09-15 (renderer with the
-  candle and colour pipeline, the
-  new assets in `frontend/src/assets/studio-*` including `studio-scene.json` and
-  the walk videos, `Studio.tsx`/`Studio.css`, `MusicCorner.tsx`, `studioScene.ts`,
-  `spotify.ts`, the `TopArtists`/`NowPlaying` refactor, `App.tsx`, the fonts in
-  `index.html`, `.gitignore`) is uncommitted.
+- **Every studio asset on disk is from the final passes of 2026-09-15** (the
+  overview and music shots from the 21:0x full run, the laptop shots and all
+  portrait walks from the two partial passes after it; `studio-scene.json` written
+  21:53 with every exposure). Nothing is stale; the whole set is ready to commit.
+- **The laptop close-up's landscape loop is still the slow one (948 s):** `dogBox`
+  was tightened to the dog's ribs, which cut its patch there from 353×1101 px to
+  142×1135 (the box's corners still straddle the frame's left edge, and `screenRect`
+  takes the bounding box of the projected corners). A `screenRect` that clipped the
+  projected box against the frame properly, or a `dogBox` a few centimetres smaller,
+  would drop it to the portrait loop's ≈ 5 min. Worth doing before the next full
+  render; check the overview loop afterwards for a seam where the chest meets the
+  patch's edge.
+- **Commit the sofa, the dog and the work station** (the candle work was committed
+  by the user as `213ab43`; everything after is not): `tools/studio-render/index.html`
+  and `render.mjs`, every re-rendered `frontend/src/assets/studio-*` (the overview,
+  music and laptop stills and loops, the eight walks — the music ones renamed with
+  `git mv`, the laptop ones new — and `studio-scene.json`), `frontend/src/Studio.tsx`,
+  `Studio.css`, `Workstation.tsx`, `MusicCorner.tsx`, `studioScene.ts`, `App.tsx`
+  and this file. Commit the JPEGs/MP4s together with the shader (see the drift note
+  in config bugs). The `pictures/` folder stays out of git.
 - **Backend review leftovers** (user is fixing these themselves, walking through
   together):
   - `getCurrent.ts`: guard `data.item === null` → return `{ is_playing: false }`.
@@ -874,7 +1159,8 @@ name + Spotify content that used to be the whole site still lives on its own pag
   already has inbound allow rules for Node.js on Public and Private. A connected
   phone shows up as a remote address in `Get-NetTCPConnection -LocalPort 5173`.
 - `.gitignore` ignores `*.png` (so reference photos can sit in the repo folder
-  without being committed), `dist/`, and `tools/studio-render/preview-*.jpg` /
+  without being committed), `/pictures/` (the user's dog photos, the reference for
+  the dog on the sofa), `dist/`, and `tools/studio-render/preview-*.jpg` /
   `preview-*.mp4` / `preview-*.json`. The JPEGs, MP4s **and `studio-scene.json`**
   in `frontend/src/assets/` are **meant** to be committed — the site needs them.
 - Checking the studio walks (2026-09-15): headless Chrome against the Vite dev
@@ -945,7 +1231,8 @@ name + Spotify content that used to be the whole site still lives on its own pag
 ```
 website-/                        (repo root)
 ├── .env                         (gitignored; see Local dev for var names)
-├── .gitignore                   (*.png, tools/studio-render/preview-*.{jpg,mp4}, …)
+├── .gitignore                   (*.png, /pictures/, tools/studio-render/preview-*.{jpg,mp4}, …)
+├── pictures/                    (gitignored: the user's three dog photos, reference for the dog on the sofa)
 ├── docker-compose.yaml
 ├── dist/                        (gitignored backend build output from `npm run build`)
 ├── package.json / package-lock.json / tsconfig.json     (backend; devDependency ffmpeg-static for tools/studio-render)
@@ -963,8 +1250,8 @@ website-/                        (repo root)
 │       └── migrations_002.sql   (empty)
 ├── tools/
 │   └── studio-render/
-│       ├── index.html           (WebGL2 path tracer: hall, both blackboards, hanging name, music corner, the candle on its crate; colour film post with the candle's flicker; overlay anchors)
-│       ├── render.mjs           (headless-Chrome driver; shot cameras; writes stills, loops, walks and studio-scene.json)
+│       ├── index.html           (WebGL2 path tracer: hall, both blackboards, hanging name, music corner, the candle on its crate, the sofa with the dog asleep on it, the work station — crate of books, laptop, second candle, papers; colour film post with each candle's flicker; overlay anchors)
+│       ├── render.mjs           (headless-Chrome driver; shot cameras for the overview and two close-ups; writes stills, loops, walks and studio-scene.json)
 │       ├── Michroma-Regular.ttf (OFL font for the hanging name; commit it)
 │       └── preview-*.jpg/.mp4   (gitignored quick renders)
 ├── frontend/                    (Vite React app, own package.json/tsconfigs/eslint.config.js)
@@ -979,9 +1266,10 @@ website-/                        (repo root)
 │       ├── App.css              (Spotify page: name, table, now-playing, SnoopyLedge styles)
 │       ├── Home.tsx / Home.css  (baby photo, thought bubble, zoom-in transition)
 │       ├── ThoughtCloud.tsx     ("click me!" cloud SVG)
-│       ├── Studio.tsx / Studio.css   (shots, loops, walks between them, --flicker in step with the video; all studio + music corner styles incl. candlelight)
+│       ├── Studio.tsx / Studio.css   (three shots, loops, walks between them via the overview, --flicker in step with the video; all studio + music corner + laptop screen styles incl. candlelight)
 │       ├── MusicCorner.tsx      (live overlay: top-artists board, notes, now-playing hologram, album cover, hotspot; --warm per lit thing)
-│       ├── studioScene.ts       (types for studio-scene.json; projection + matrix3d maths; candleFlicker / candleWarmth)
+│       ├── Workstation.tsx      (live overlay: the laptop's home screen with its shortcuts (GitHub) and clock, the hotspot)
+│       ├── studioScene.ts       (types for studio-scene.json; projection + matrix3d maths; candleFlicker / candleWarmth over both candles)
 │       ├── spotify.ts           (useNowPlaying / useTopArtists hooks)
 │       ├── SpotifyPage.tsx      (name + NowPlaying + TopArtists)
 │       ├── NowPlaying.tsx       (album art with SnoopyLedge hover)
@@ -990,10 +1278,11 @@ website-/                        (repo root)
 │       └── assets/
 │           ├── baby-me-1200.jpg / baby-me-2000.jpg   (home photo)
 │           ├── studio-landscape.jpg / studio-portrait.jpg   (overview stills, from tools/studio-render)
-│           ├── studio-landscape.mp4 / studio-portrait.mp4   (6 s loops of the same frames: letters sway, record turns, candle flickers)
+│           ├── studio-landscape.mp4 / studio-portrait.mp4   (6 s loops of the same frames: letters sway, record turns, candles flicker, dog breathes)
 │           ├── studio-music-{landscape,portrait}.jpg/.mp4   (music corner close-up still + loop)
-│           ├── studio-walk-{in,out}-{landscape,portrait}.mp4 (2 s camera walks between the shots)
-│           ├── studio-scene.json                             (cameras per shot and per walk frame, overlay anchors, the candle's light numbers)
+│           ├── studio-laptop-{landscape,portrait}.jpg/.mp4  (laptop close-up still + loop: its candle's flame)
+│           ├── studio-{music,laptop}-walk-{in,out}-{landscape,portrait}.mp4 (2 s / 2.6 s camera walks between the overview and each close-up)
+│           ├── studio-scene.json                             (cameras per shot and per walk frame, overlay anchors, the candles' light numbers)
 │           └── hero.png, react.svg, vite.svg         (unused template leftovers)
 ├── context/                     (this folder)
 └── .claude/skills/update/SKILL.md   (the /update skill that maintains this file)
@@ -1081,6 +1370,16 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
   they *do* name the object, they name real things (a Carby Musk candle from Drake's
   Better World Fragrance House): look up the actual product and model it from its
   photos.
+- **They put their own life into the studio from their own photos** (2026-09-15: "go
+  through the pictures in pictures. That's my dog, can you render him on a chair …
+  you can even render the sofa from the pictures I uploaded"), drop the photos into
+  a folder at the repo root, describe the pose from memory of how he sleeps, and
+  offer more: "If you need to ask me any more questions or have me upload more
+  images I can". Build from what's there, state the reading taken ("the chalk
+  board" = the tagline board; chin on the arm), and when a photo doesn't show the
+  thing asked for (none shows him asleep), say so and take up the offer rather than
+  guessing twice. They judge likeness ("looks like him") from those photos, so check
+  the model at close range with scratch cameras, not just in the 70 px overview.
 - **"Zoom into the screen" = walking into the close-up** (the camera walk they once
   asked to "zoom in"). They open the dev site while a long render is still running
   and report what they see ("right now it [the candle] disappears") — during a

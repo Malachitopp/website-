@@ -8,10 +8,14 @@
   on a 2D canvas and sampled as a texture) and broken chalk scattered on the floor; the
   name hangs from the tubes; to the right is the music corner (a record player on a
   wooden box, a second board the site writes the top artists on, and a candle burning on a
-  crate beside that board). Every frame adds one more light path per pixel; after enough
-  frames the noise settles into something photographic, then a film look is applied in JS.
-  The hall is black and white; the only colour is the candle (its navy glass, and the warm
-  light of its flame, which is kept apart from the tubes' light so post can make it flicker).
+  crate beside that board); to the left a small sofa in a fleece cover with the dog asleep on
+  it, chin on the arm, and between the sofa and the board a work station: a tall crate of
+  books with an open laptop on it (its screen showing GitHub's mark), a second candle, and
+  scribbled sheets of physics on the floor round it. Every frame adds one more light path per
+  pixel; after enough frames the noise settles into something photographic, then a film look
+  is applied in JS. The hall is black and white; the only colour is the candles (their navy
+  glass, and the warm light of their flames, each kept apart from the tubes' light so post can
+  make it flicker on its own).
 
   Not part of the site. Run `node tools/studio-render/render.mjs` from the repo root to
   regenerate frontend/src/assets/studio-*. It loads this page with query params w, h
@@ -38,17 +42,21 @@
       precision highp float;
       precision highp int;
 
-      uniform sampler2D uPrev; // the sums so far: light from the tubes and the door (rgb), the flame seen directly (a)
-      uniform sampler2D uPrevCandle; // ...and light from the candle (rgb)
+      uniform sampler2D uPrev; // the sums so far: light from the tubes and the door (rgb)
+      uniform sampler2D uPrevCandle; // ...light from the candle by the music board (rgb) and its flame seen directly (a)
+      uniform sampler2D uPrevCandle2; // ...and the same for the candle on the work station
       uniform sampler2D uBoard; // chalk on the blackboard, drawn in JS (r: 0 = slate, 1 = chalk)
       uniform sampler2D uLabel; // the gold printing round the candle's glass (r: 0 = glass, 1 = gold)
-      uniform vec4 uFlame; // the flame's pose: sway in x and z of its tip (m), height scale
+      uniform vec4 uFlame[2]; // each flame's pose: sway in x and z of its tip (m), height scale
+      uniform sampler2D uScreen; // what the laptop's screen shows (r: 0 = dark, 1 = a white pixel)
+      uniform sampler2D uPaper; // the drawings on the sheets of paper, four in a 2 × 2 atlas (r: 0 = paper, 1 = pencil)
       uniform vec2 uRes;
       uniform int uFrame;
       uniform float uTanY;
       uniform vec3 uCamPos, uCamRight, uCamUp, uCamFwd; // the camera, set per render from JS
       uniform sampler2D uBoard2; // the music board's slate: just the haze of old wiping (the site writes on it live)
       uniform float uSpin; // how far the record has turned (rad)
+      uniform float uBreath; // the dog's ribs: 1 at rest, a little more as he breathes in
       // the name, hung letter by letter from a row of tubes; laid out in JS (see hangingLetters)
       const int LETTER_N = 11;
       uniform sampler2D uLetters; // signed distance to each letter's outline, in atlas pixels
@@ -61,6 +69,7 @@
       uniform vec3 uLetterMin, uLetterMax; // box around all the letters and their wires
       layout(location = 0) out vec4 outBase;
       layout(location = 1) out vec4 outCandle;
+      layout(location = 2) out vec4 outCandle2;
 
       const float PI = 3.14159265;
 
@@ -145,6 +154,65 @@
       const float CANDLE_SOFT = 0.7; // m: softens the fall-off of its light close to it
       const float CANDLE_REACH = 9.0; // m: beyond this the candle adds nothing that can be seen
 
+      // ---- the sofa on the left of the tagline board, with the dog asleep on it ----
+      // A small two-seater in a fluffy grey fleece cover (the cover reaches the floor; plump
+      // rolled arms, a leaning back with two loose cushions on it, a couple of pillows piled in
+      // its left corner), stood half a metre left of the board's left leg and a little in front
+      // of it, turned a touch towards the middle of the hall. The dog — a black schnauzer — lies
+      // along the seat on his front at an angle, back end by the pillows, chest at the front
+      // edge, chin propped on the right arm, one front paw hanging over the edge. His ribs rise
+      // and fall with uBreath in the loops. All of it is one signed distance field, sphere-traced
+      // in the sofa's frame (origin in the middle of its footprint on the floor, front at -z).
+      const vec3 SOFA_POS = vec3(-2.35, 0.0, 11.1);
+      const float SOFA_C = 0.96126, SOFA_S = -0.27564; // -16°
+      const float SEAT_Y = 0.52; // the top of the seat cushion
+      const vec3 DOG_POS = vec3(0.20, 0.62, -0.10); // the middle of his body (sofa frame)
+      const float DOG_C = 0.8660254, DOG_S = 0.5; // 30°: he lies across the seat at an angle, chest towards the front right corner
+      const vec3 HEAD_C = vec3(0.60, 0.74, -0.22); // the middle of his head (sofa frame); the muzzle points along +x, over the arm
+
+      // ---- the work station, between the sofa and the tagline board ----
+      // A plywood crate like the candle's but taller and wider, stood on end just in front of the
+      // board's left leg and clear of the sofa's arm, turned a little to the right so its front
+      // faces the room: two shelves of books inside, and on top an open laptop (its screen showing
+      // the GitHub mark — up close the site lays its home screen over it), a second Carby Musk
+      // candle burning at the laptop's right, a pencil, and a sheet of paper half under the
+      // laptop. More sheets of scribbled physics and system diagrams lie on the floor round its
+      // feet. Everything is in the crate's frame: origin in the middle of its footprint, open side
+      // at -z.
+      const vec3 DESK_POS = vec3(-1.15, 0.0, 11.3);
+      const float DESK_C = 0.90630779, DESK_S = -0.42261826; // -25°
+      const float DESK_HW = 0.25, DESK_HD = 0.20, DESK_H = 0.9; // half width, half depth, height
+      const float DESK_S1 = 0.29, DESK_S2 = 0.58; // the two shelves' undersides
+      const vec2 DESK_JAR = vec2(-0.175, 0.0); // where the second candle stands on top (x, z): the laptop's left, its lid between the flame and the tagline board
+      // the laptop: a 14" machine with its lid open 110°, in its own frame: origin under the middle of its base
+      const vec2 LAP_C = vec2(0.07, 0.012); // where the base sits on the crate (x, z)
+      const float LAP_HW = 0.155, LAP_HD = 0.108, LAP_T = 0.016, LAP_R = 0.004; // base: half width, half depth, thickness, rounding
+      const float LID_H = 0.206, LID_T = 0.005; // the lid: how far it reaches from the hinge, thickness
+      const float LID_C = 0.93969262, LID_S = 0.34202014; // 20°: how far past upright it leans back
+      const float HINGE_Z = 0.102; // the hinge runs along the back of the base (z from the base's middle), at the base's top
+      const float BEZEL_X = 0.006, BEZEL_LO = 0.0125, BEZEL_HI = 0.0075; // the screen inside the lid's face: from its sides, its bottom, its top
+      const float SCREEN_LE = 0.9; // the screen's glow, for a white pixel
+      // sheets of A4 (x, z of the middle, yaw, which of the four drawings): four on the floor round the crate, one on top under the laptop
+      const int PAPER_N = 5;
+      const vec4 PAPER[PAPER_N] = vec4[PAPER_N](
+        vec4(-0.42, -0.34, 0.35, 0.0), vec4(0.16, -0.46, -0.55, 1.0), vec4(0.50, -0.12, 1.25, 2.0),
+        vec4(-0.08, -0.62, 0.12, 3.0), vec4(0.085, -0.095, 1.45, 2.0));
+      const float PAPER_HW = 0.105, PAPER_HL = 0.1485, PAPER_T = 0.0003;
+      // the books on the shelves: min and max corners of each row standing spine-out (the first
+      // four) and of each one lying flat (the rest)
+      const int DBOOK_N = 8, DBOOK_STANDING = 4;
+      const vec3 DBOOK[2 * DBOOK_N] = vec3[2 * DBOOK_N](
+        vec3(0.12, 0.018, -0.14), vec3(0.228, 0.245, 0.17), // bottom right, standing
+        vec3(-0.228, 0.308, -0.15), vec3(-0.07, 0.545, 0.17), // middle shelf, two rows of different heights
+        vec3(-0.07, 0.308, -0.135), vec3(0.04, 0.52, 0.17),
+        vec3(-0.228, 0.598, -0.145), vec3(-0.11, 0.83, 0.17), // top shelf
+        vec3(-0.21, 0.018, -0.16), vec3(0.06, 0.052, 0.12), // a stack lying flat in the bottom, not squared up
+        vec3(-0.2, 0.052, -0.15), vec3(0.075, 0.08, 0.125),
+        vec3(-0.215, 0.08, -0.165), vec3(0.05, 0.104, 0.115),
+        vec3(-0.08, 0.598, -0.17), vec3(0.16, 0.628, 0.07)); // one lying on the top shelf
+      const vec3 DBOOK_LEAN = vec3(0.045, 0.308, 0.0); // a book leaning over from the middle row to the crate's side
+      const float LEAN_C = 0.88295, LEAN_S = 0.46947; // 28°
+
       // broken chalk on the floor around it: x, z, yaw (rad), length — in the board frame
       const int CHALK_N = 27;
       const vec4 CHALK[CHALK_N] = vec4[CHALK_N](
@@ -169,7 +237,8 @@
         M_BOARD = 12, M_FRAME = 13, M_STAND = 14, M_WHEEL = 15, M_CHALK = 16, M_ERASER = 17,
         M_LETTER = 18, M_WIRE = 19, M_BOARD2 = 20, M_WOOD = 21, M_SLEEVE = 22, M_PLINTH = 23,
         M_PLATTER = 24, M_RECORD = 25, M_METAL = 26, M_RUBBER = 27, M_GLASS = 28, M_WAX = 29,
-        M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32;
+        M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32, M_SOFA = 33, M_PILLOW = 34, M_DOG = 35, M_NOSE = 36,
+        M_LAPTOP = 37, M_SCREEN = 38, M_DBOOK = 39, M_PAPER = 40, M_PENCIL = 41;
 
       struct Hit { float t; vec3 n; int m; };
 
@@ -181,9 +250,20 @@
       vec3 board2Local(vec3 p) { return yawLocal(p, BOARD2_POS, BOARD2_C, BOARD2_S); }
       vec3 tableLocal(vec3 p) { return yawLocal(p, TABLE_POS, TABLE_C, TABLE_S); }
       vec3 crateLocal(vec3 p) { return yawLocal(p, CANDLE_TABLE_POS, BOARD2_C, BOARD2_S); }
-      // the candle's jar: origin under the middle of its base
-      vec3 jarLocal(vec3 p) { return crateLocal(p) - vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y); }
-      vec3 jarWorld(vec3 q) { q += vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y); return CANDLE_TABLE_POS + yawWorldDir(q, BOARD2_C, BOARD2_S); }
+      vec3 sofaLocal(vec3 p) { return yawLocal(p, SOFA_POS, SOFA_C, SOFA_S); }
+      vec3 deskLocal(vec3 p) { return yawLocal(p, DESK_POS, DESK_C, DESK_S); }
+      // The two candles' jars, each in a frame of its own with the origin under the middle of its
+      // base and the yaw of the crate it stands on: 0 is the one by the music board, 1 the one on
+      // the work station.
+      const int CANDLE_N = 2;
+      vec2 jarYaw(int i) { return i == 0 ? vec2(BOARD2_C, BOARD2_S) : vec2(DESK_C, DESK_S); }
+      vec3 jarOrigin(int i) {
+        return i == 0 ? CANDLE_TABLE_POS + yawWorldDir(vec3(CANDLE_C.x, CRATE_H, CANDLE_C.y), BOARD2_C, BOARD2_S)
+                      : DESK_POS + yawWorldDir(vec3(DESK_JAR.x, DESK_H, DESK_JAR.y), DESK_C, DESK_S);
+      }
+      vec3 jarLocal(vec3 p, int i) { vec2 y = jarYaw(i); return yawLocalDir(p - jarOrigin(i), y.x, y.y); }
+      vec3 jarWorld(vec3 q, int i) { vec2 y = jarYaw(i); return jarOrigin(i) + yawWorldDir(q, y.x, y.y); }
+      int nearestJar(vec3 p) { return distance(p, jarOrigin(0)) < distance(p, jarOrigin(1)) ? 0 : 1; }
       // a point on one of the boards' shared parts (rail, tray, stand), in that board's frame
       vec3 nearestBoardLocal(vec3 p) { return distance(p.xz, BOARD_POS.xz) < distance(p.xz, BOARD2_POS.xz) ? boardLocal(p) : board2Local(p); }
 
@@ -484,14 +564,221 @@
         if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, BOARD2_C, BOARD2_S); h.m = l.m; }
       }
 
+      // ---- the sofa and the dog: soft shapes, so a signed distance field rather than boxes ----
+      float sdRoundBox(vec3 p, vec3 b, float r) { vec3 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r; }
+      float sdEllipsoid(vec3 p, vec3 r) { float k0 = length(p / r); float k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / max(k1, 1e-6); }
+      float sdCapsule(vec3 p, vec3 a, vec3 b, float r) { vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h) - r; }
+      float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+      // into the frame of something leaning back by the angle with cosine c and sine s (about x), or turned about z
+      vec3 leanBack(vec3 p, float c, float s) { return vec3(p.x, c * p.y + s * p.z, c * p.z - s * p.y); }
+      vec3 turnZ(vec3 p, float c, float s) { return vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z); }
+
+      // The sofa, in its frame: the base (the cover hangs to the floor), the seat cushion, two
+      // rolled arms, the back leaning a little with a cushion each side propped on it, and in the
+      // left corner a square patterned pillow with a smaller fluffy one leaning on it. m is the
+      // nearest part's material.
+      float sofaSDF(vec3 p, out int m) {
+        float d = sdRoundBox(p - vec3(0.0, 0.21, 0.04), vec3(0.72, 0.13, 0.33), 0.09); // the base: to the floor, top at 0.43
+        d = smin(d, sdRoundBox(p - vec3(0.0, 0.45, -0.08), vec3(0.50, 0.0, 0.28), 0.07), 0.03); // the seat cushion: top at SEAT_Y, its lip out past the base
+        vec3 a = vec3(abs(p.x), p.y, p.z); // the arms: a block from x 0.56 out, with a roll along the top (top at 0.675)
+        d = smin(d, sdRoundBox(a - vec3(0.69, 0.40, 0.02), vec3(0.03, 0.10, 0.31), 0.10), 0.03);
+        d = smin(d, sdCapsule(a, vec3(0.69, 0.56, -0.30), vec3(0.69, 0.56, 0.36), 0.115), 0.04);
+        vec3 q = leanBack(p - vec3(0.0, 0.30, 0.31), 0.99027, 0.13917); // the back leans 8°: a slab with a roll along its top
+        d = smin(d, sdRoundBox(q - vec3(0.0, 0.26, 0.05), vec3(0.72, 0.18, 0.01), 0.08), 0.03);
+        d = smin(d, sdCapsule(q, vec3(-0.70, 0.50, 0.05), vec3(0.70, 0.50, 0.05), 0.10), 0.04);
+        q = leanBack(p - vec3(0.0, 0.50, 0.14), 0.98481, 0.17365); // the back cushions lean 10°
+        d = smin(d, sdRoundBox(vec3(abs(q.x), q.y, q.z) - vec3(0.29, 0.17, 0.10), vec3(0.19, 0.10, 0.03), 0.07), 0.02);
+        m = M_SOFA;
+        q = turnZ(leanBack(p - vec3(-0.36, 0.52, 0.10), 0.92718, 0.37461), 0.99756, 0.06976); // the square pillow: 22° back, turned 4°
+        float pillow = sdRoundBox(q - vec3(0.0, 0.20, 0.0), vec3(0.17, 0.17, 0.015), 0.03);
+        if (pillow < d) { d = pillow; m = M_PILLOW; }
+        q = turnZ(leanBack(p - vec3(-0.26, 0.52, -0.02), 0.86603, 0.5), 0.99452, -0.10453); // the fluffy one: 30° back, turned -6°
+        pillow = sdRoundBox(q - vec3(0.0, 0.16, 0.0), vec3(0.13, 0.13, 0.02), 0.035);
+        if (pillow < d) { d = pillow; m = M_SOFA; }
+        return d;
+      }
+
+      // The dog, in the sofa's frame. His body lies at DOG's angle: the ribs (swelling with
+      // uBreath), the hindquarters, the near hind leg sprawled flat out to the side with its foot
+      // beside his belly, a tail lying on the cushion. The neck reaches for the right arm, where
+      // his head rests on its chin: a domed skull, the long brick of a schnauzer muzzle and beard,
+      // a ridge of brow over the eyes, ears folded forward and down the sides of his head, a nose.
+      // The front legs lie ahead of his chest; the near one hangs its paw over the front edge, the
+      // far one lies along the seat by the arm.
+      float dogSDF(vec3 p, out int m) {
+        m = M_DOG;
+        float bound = sdRoundBox(p - vec3(0.325, 0.59, -0.135), vec3(0.475, 0.23, 0.335), 0.0);
+        if (bound > 0.04) return bound; // nowhere near him: the box round him is a fair enough distance
+        vec3 b = yawLocal(p, DOG_POS, DOG_C, DOG_S);
+        float ribs = sdEllipsoid(b - vec3(0.10, 0.0, 0.0), vec3(0.17, 0.125 * uBreath, 0.11 * uBreath));
+        float body = smin(ribs, sdEllipsoid(b - vec3(-0.15, -0.01, 0.0), vec3(0.135, 0.11, 0.105)), 0.08);
+        body = smin(body, sdEllipsoid(b - vec3(-0.13, -0.05, -0.09), vec3(0.10, 0.075, 0.045)), 0.04); // the near thigh, flat on the seat
+        body = smin(body, sdCapsule(b, vec3(-0.06, -0.07, -0.13), vec3(0.06, -0.075, -0.145), 0.03), 0.02); // its foot, out beside the belly
+        body = smin(body, sdCapsule(b, vec3(-0.27, -0.02, 0.02), vec3(-0.36, -0.085, 0.06), 0.018), 0.03); // the tail
+        body = smin(body, sdCapsule(p, vec3(0.39, 0.68, -0.21), vec3(0.55, 0.715, -0.22), 0.06), 0.05); // the neck
+        vec3 h = p - HEAD_C;
+        vec3 hm = vec3(h.x, h.y, abs(h.z)); // the head is symmetrical
+        float head = sdRoundBox(h, vec3(0.038, 0.02, 0.022), 0.036); // the skull: a dome flattened on top and at the sides, as the breed's is
+        head = smin(head, sdCapsule(h, vec3(0.03, -0.005, 0.0), vec3(0.115, -0.015, -0.002), 0.03), 0.03); // the muzzle
+        head = smin(head, sdRoundBox(h - vec3(0.10, -0.055, -0.002), vec3(0.045, 0.018, 0.022), 0.014), 0.02); // the beard, a deep block hanging under it
+        head = smin(head, sdEllipsoid(hm - vec3(0.058, 0.032, 0.026), vec3(0.022, 0.012, 0.017)), 0.012); // a bushy brow over each eye
+        vec3 e = turnZ(hm - vec3(0.0, 0.0, 0.062), 0.34202, 0.93969); // the ears: flaps down the sides of the skull, tips 70° down and a little forward...
+        head = smin(head, sdEllipsoid(e, vec3(0.05, 0.03, 0.011)), 0.01);
+        head = smin(head, sdEllipsoid(hm - vec3(-0.008, 0.052, 0.05), vec3(0.03, 0.012, 0.018)), 0.012); // ...folded over the top corners of the skull
+        float nose = length(h - vec3(0.135, -0.005, -0.002)) - 0.016;
+        float near = sdCapsule(p, vec3(0.39, 0.59, -0.26), vec3(0.45, 0.55, -0.35), 0.04); // near front leg: upper, forearm, the paw hanging over the edge
+        near = smin(near, sdCapsule(p, vec3(0.45, 0.55, -0.35), vec3(0.53, 0.52, -0.42), 0.032), 0.02);
+        near = smin(near, sdCapsule(p, vec3(0.53, 0.51, -0.43), vec3(0.535, 0.43, -0.445), 0.034), 0.02);
+        float far = sdCapsule(p, vec3(0.43, 0.58, -0.17), vec3(0.51, 0.555, -0.27), 0.04); // far front leg, lying along the seat by the arm
+        far = smin(far, sdCapsule(p, vec3(0.51, 0.555, -0.27), vec3(0.545, 0.55, -0.36), 0.032), 0.02);
+        float d = smin(smin(body, head, 0.03), min(near, far), 0.04);
+        if (nose < d) { d = nose; m = M_NOSE; }
+        return d;
+      }
+
+      float sofaField(vec3 p) { int m; return min(sofaSDF(p, m), dogSDF(p, m)); }
+
+      // Sphere-traces the sofa and the dog inside one box round them. The normal is the field's
+      // gradient, roughened a little: curly fleece on the sofa, a wiry coat on the dog.
+      void sofa(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = sofaLocal(wo), d = yawLocalDir(wd, SOFA_C, SOFA_S);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-0.84, 0.0, -0.47), vec3(0.84, 0.92, 0.48), tn, tf, n) || tn >= h.t) return;
+        float t = max(tn, 1e-4);
+        tf = min(tf, h.t);
+        int m = M_NONE, ms, md;
+        float dist = 1.0;
+        for (int i = 0; i < 192; i++) {
+          vec3 p = o + d * t;
+          float ds = sofaSDF(p, ms), dd = dogSDF(p, md);
+          dist = min(ds, dd);
+          if (dist < 3e-4) { m = dd < ds ? md : ms; break; }
+          t += max(dist * 0.95, 2e-4);
+          if (t > tf) return;
+        }
+        // out of steps creeping along a silhouette: if it's within a few mm, that's a hit (a miss would show the background through the edge)
+        if (m == M_NONE) { if (dist > 3e-3) return; int mm; m = dogSDF(o + d * t, mm) < sofaSDF(o + d * t, ms) ? mm : ms; }
+        vec3 p = o + d * t;
+        vec2 e = vec2(4e-4, 0.0);
+        n = normalize(vec3(sofaField(p + e.xyy) - sofaField(p - e.xyy), sofaField(p + e.yxy) - sofaField(p - e.yxy), sofaField(p + e.yyx) - sofaField(p - e.yyx)));
+        float rough = m == M_DOG ? 0.14 : m == M_NOSE ? 0.0 : 0.09, freq = m == M_DOG ? 350.0 : 110.0;
+        n = normalize(n + rough * 2.0 * (vec3(noise(p.yz * freq), noise(p.zx * freq + 7.0), noise(p.xy * freq + 13.0)) - 0.5));
+        h.t = t; h.n = yawWorldDir(n, SOFA_C, SOFA_S); h.m = m;
+      }
+
+      // ---- the work station ----
+      // the laptop's frame (origin under the middle of its base) from the crate's, and the lid's from
+      // the laptop's: x across, y up the lid from the hinge, z through it from the screen's face to its back
+      vec3 lapLocal(vec3 q) { return q - vec3(LAP_C.x, DESK_H, LAP_C.y); }
+      vec3 lidLocal(vec3 q) {
+        q -= vec3(0.0, LAP_T, HINGE_Z);
+        return vec3(q.x, LID_C * q.y + LID_S * q.z, LID_C * q.z - LID_S * q.y);
+      }
+      // the base and the lid, both slabs with rounded corners
+      float laptopSDF(vec3 q) {
+        float base = sdRoundBox(q - vec3(0.0, 0.5 * LAP_T, 0.0), vec3(LAP_HW, 0.5 * LAP_T, LAP_HD) - LAP_R, LAP_R);
+        vec3 l = lidLocal(q);
+        float lid = sdRoundBox(l - vec3(0.0, 0.5 * LID_H, 0.5 * LID_T), vec3(LAP_HW, 0.5 * LID_H, 0.5 * LID_T) - 0.002, 0.002);
+        return min(base, lid);
+      }
+      // where on the screen a point of the lid's face is (0..1 across from the left, 0..1 down from the top); outside that it's bezel
+      vec2 screenUV(vec3 l) {
+        return vec2((l.x + LAP_HW - BEZEL_X) / (2.0 * (LAP_HW - BEZEL_X)), 1.0 - (l.y - BEZEL_LO) / (LID_H - BEZEL_LO - BEZEL_HI));
+      }
+
+      // Sphere-traces the laptop (crate frame). A hit on the lid's face inside the bezel is the screen.
+      void laptop(vec3 o, vec3 d, inout Hit l) {
+        vec3 lo = lapLocal(o);
+        float tn, tf; vec3 n;
+        vec3 top = vec3(LAP_HW + 0.01, LAP_T + LID_H * LID_C + 0.01, HINGE_Z + LID_H * LID_S + LID_T + 0.01);
+        if (!slab(lo, d, vec3(-LAP_HW - 0.01, -0.002, -LAP_HD - 0.01), top, tn, tf, n) || tn >= l.t) return;
+        float t = max(tn, 1e-4);
+        tf = min(tf, l.t);
+        for (int i = 0; i < 64; i++) {
+          vec3 q = lo + d * t;
+          float dist = laptopSDF(q);
+          if (dist < 1e-4) {
+            vec2 e = vec2(2e-4, 0.0);
+            vec3 nn = normalize(vec3(laptopSDF(q + e.xyy) - laptopSDF(q - e.xyy), laptopSDF(q + e.yxy) - laptopSDF(q - e.yxy), laptopSDF(q + e.yyx) - laptopSDF(q - e.yyx)));
+            vec3 lq = lidLocal(q);
+            vec2 uv = screenUV(lq);
+            bool face = lq.z < 0.0015 && lq.y > 0.0 && dot(nn, vec3(0.0, LID_S, -LID_C)) > 0.7;
+            l.t = t; l.n = nn; l.m = face && uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0 ? M_SCREEN : M_LAPTOP;
+            return;
+          }
+          t += max(dist * 0.95, 1e-4);
+          if (t > tf) return;
+        }
+      }
+
+      // the sheets of paper, each a thin box turned to its own angle; on the floor they lie one over
+      // another where they overlap, later ones on top
+      float paperTop(int i) { return i == PAPER_N - 1 ? DESK_H + 0.0004 : 0.0002 + PAPER_T * float(i); }
+      void papers(vec3 o, vec3 d, inout Hit l) {
+        for (int i = 0; i < PAPER_N; i++) {
+          vec4 s = PAPER[i];
+          float top = paperTop(i);
+          float cs = cos(s.z), sn = sin(s.z);
+          vec3 ro = o - vec3(s.x, 0.0, s.y), rd = d;
+          ro.xz = vec2(cs * ro.x - sn * ro.z, sn * ro.x + cs * ro.z);
+          rd.xz = vec2(cs * rd.x - sn * rd.z, sn * rd.x + cs * rd.z);
+          Hit p; p.t = l.t; p.m = M_NONE; p.n = vec3(0);
+          box(ro, rd, vec3(-PAPER_HW, top - PAPER_T, -PAPER_HL), vec3(PAPER_HW, top, PAPER_HL), M_PAPER, p);
+          if (p.t < l.t) { l.t = p.t; l.m = p.m; l.n = vec3(cs * p.n.x + sn * p.n.z, p.n.y, -sn * p.n.x + cs * p.n.z); }
+        }
+      }
+
+      // The crate with its shelves of books, the laptop, the candle, the pencil and the papers.
+      void workstation(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = deskLocal(wo), d = yawLocalDir(wd, DESK_C, DESK_S);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-0.65, 0.0, -0.85), vec3(0.7, DESK_H + 0.24, 0.25), tn, tf, n) || tn >= h.t) return;
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        // the crate and what stands on it, up to the top of the laptop's lid (1.11 m; it was once clipped at the jar's rim + 4 cm, and the top of the lid went missing)
+        if (slab(o, d, vec3(-DESK_HW - 0.02, 0.0, -DESK_HD - 0.02), vec3(DESK_HW + 0.02, DESK_H + 0.24, DESK_HD + 0.04), tn, tf, n) && tn < l.t) {
+          // the crate: top, bottom, sides, back and two shelves; open to the front
+          box(o, d, vec3(-DESK_HW, DESK_H - BOX_T, -DESK_HD), vec3(DESK_HW, DESK_H, DESK_HD), M_WOOD, l);
+          box(o, d, vec3(-DESK_HW, 0.0, -DESK_HD), vec3(DESK_HW, BOX_T, DESK_HD), M_WOOD, l);
+          box(o, d, vec3(-DESK_HW, BOX_T, -DESK_HD), vec3(-DESK_HW + BOX_T, DESK_H - BOX_T, DESK_HD), M_WOOD, l);
+          box(o, d, vec3(DESK_HW - BOX_T, BOX_T, -DESK_HD), vec3(DESK_HW, DESK_H - BOX_T, DESK_HD), M_WOOD, l);
+          box(o, d, vec3(-DESK_HW + BOX_T, BOX_T, DESK_HD - BOX_T), vec3(DESK_HW - BOX_T, DESK_H - BOX_T, DESK_HD), M_WOOD, l);
+          box(o, d, vec3(-DESK_HW + BOX_T, DESK_S1, -DESK_HD + 0.01), vec3(DESK_HW - BOX_T, DESK_S1 + BOX_T, DESK_HD - BOX_T), M_WOOD, l);
+          box(o, d, vec3(-DESK_HW + BOX_T, DESK_S2, -DESK_HD + 0.01), vec3(DESK_HW - BOX_T, DESK_S2 + BOX_T, DESK_HD - BOX_T), M_WOOD, l);
+          // the books: rows standing spine-out and a few lying flat, and one leaning over to the side
+          for (int i = 0; i < DBOOK_N; i++) box(o, d, DBOOK[2 * i], DBOOK[2 * i + 1], M_DBOOK, l);
+          {
+            vec3 ro = o - DBOOK_LEAN, rd = d;
+            ro.xy = vec2(LEAN_C * ro.x - LEAN_S * ro.y, LEAN_S * ro.x + LEAN_C * ro.y);
+            rd.xy = vec2(LEAN_C * rd.x - LEAN_S * rd.y, LEAN_S * rd.x + LEAN_C * rd.y);
+            Hit s; s.t = l.t; s.m = M_NONE; s.n = vec3(0);
+            box(ro, rd, vec3(0.0, 0.0, -0.12), vec3(0.026, 0.23, 0.17), M_DBOOK, s);
+            if (s.t < l.t) { l.t = s.t; l.m = s.m; l.n = vec3(LEAN_C * s.n.x + LEAN_S * s.n.y, -LEAN_S * s.n.x + LEAN_C * s.n.y, s.n.z); }
+          }
+          // on top: the laptop, the candle in its jar, a pencil
+          laptop(o, d, l);
+          {
+            vec3 jo = o - vec3(DESK_JAR.x, DESK_H, DESK_JAR.y);
+            Hit j; j.t = l.t; j.m = M_NONE; j.n = vec3(0);
+            jar(jo, d, j);
+            cylinder(jo, d, vec3(0.0, WAX_Y - 0.002, 0.0), vec3(-0.0005, FLAME_Y + 0.002, 0.0004), 0.0009, M_RUBBER, j);
+            if (j.t < l.t) l = j;
+          }
+          cylinder(o, d, vec3(-0.235, DESK_H + 0.0035, -0.175), vec3(-0.145, DESK_H + 0.0035, -0.115), 0.0035, M_PENCIL, l);
+        }
+        papers(o, d, l);
+        if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, DESK_C, DESK_S); h.m = l.m; }
+      }
+
       // The flame, seen directly: not a surface but a glowing teardrop the ray passes through,
       // summed along the part of the ray in front of tMax (whatever the ray hits). Widest a third
       // of the way up, pointed at the tip, dim at the root where a real flame burns blue; its tip
       // sways and it stretches with uFlame.
-      float flameGlow(vec3 wo, vec3 wd, float tMax) {
-        vec3 o = jarLocal(wo) - vec3(0.0, FLAME_Y, 0.0), d = yawLocalDir(wd, BOARD2_C, BOARD2_S);
-        float height = FLAME_H * uFlame.z;
-        float reach = FLAME_R + max(abs(uFlame.x), abs(uFlame.y));
+      float flameGlow(vec3 wo, vec3 wd, float tMax, int i) {
+        vec2 yaw = jarYaw(i);
+        vec4 pose = uFlame[i];
+        vec3 o = jarLocal(wo, i) - vec3(0.0, FLAME_Y, 0.0), d = yawLocalDir(wd, yaw.x, yaw.y);
+        float height = FLAME_H * pose.z;
+        float reach = FLAME_R + max(abs(pose.x), abs(pose.y));
         float tn, tf; vec3 n;
         if (!slab(o, d, vec3(-reach, 0.0, -reach), vec3(reach, height, reach), tn, tf, n)) return 0.0;
         tn = max(tn, 0.0);
@@ -503,7 +790,7 @@
         for (int i = 0; i < STEPS; i++) {
           vec3 p = o + d * (tn + (float(i) + 0.5) * dt);
           float s = p.y / height;
-          vec2 axis = uFlame.xy * s * s;
+          vec2 axis = pose.xy * s * s;
           float radius = FLAME_R * sqrt(max(s, 0.0)) * pow(max(1.0 - s, 0.0), 0.8) / 0.42;
           float q = length(p.xz - axis) / max(radius, 1e-5);
           float core = pow(clamp(1.0 - q, 0.0, 1.0), 0.7);
@@ -595,6 +882,8 @@
         blackboard(o, d, BOARD2_POS, BOARD2_C, BOARD2_S, M_BOARD2, false, h);
         musicTable(o, d, h);
         candleTable(o, d, h);
+        sofa(o, d, h);
+        workstation(o, d, h);
         letters(o, d, h);
         return h;
       }
@@ -661,22 +950,94 @@
         if (m == M_WIRE) return 0.75;
         if (m == M_WOOD) {
           // pine boards: grain running along each board, two boards to a panel, darker end grain on
-          // the edges. Two crates are made of it: the record player's and the candle's (stood on
-          // end, with a shelf).
-          bool candle = distance(p.xz, CANDLE_TABLE_POS.xz) < distance(p.xz, TABLE_POS.xz);
-          vec3 q = candle ? crateLocal(p) : tableLocal(p);
-          vec3 size = candle ? vec3(CRATE_HW, CRATE_H, CRATE_HD) : vec3(BOX_HW, BOX_H, BOX_HD); // half width, height, half depth
-          bool shelf = candle && q.y > SHELF_Y - 1e-3 && q.y < SHELF_Y + BOX_T + 1e-3 && abs(q.x) < size.x - BOX_T + 1e-3;
+          // the edges. Three crates are made of it: the record player's, the candle's (stood on
+          // end, with a shelf) and the work station's (taller, two shelves).
+          float dCandle = distance(p.xz, CANDLE_TABLE_POS.xz), dTable = distance(p.xz, TABLE_POS.xz), dDesk = distance(p.xz, DESK_POS.xz);
+          int which = dDesk < min(dCandle, dTable) ? 2 : dCandle < dTable ? 1 : 0;
+          vec3 q = which == 2 ? deskLocal(p) : which == 1 ? crateLocal(p) : tableLocal(p);
+          vec3 size = which == 2 ? vec3(DESK_HW, DESK_H, DESK_HD) : which == 1 ? vec3(CRATE_HW, CRATE_H, CRATE_HD) : vec3(BOX_HW, BOX_H, BOX_HD); // half width, height, half depth
+          float shelfY = which == 1 ? SHELF_Y : which == 2 ? (q.y < 0.5 * (DESK_S1 + DESK_S2) ? DESK_S1 : DESK_S2) : -1.0;
+          bool shelf = shelfY > 0.0 && q.y > shelfY - 1e-3 && q.y < shelfY + BOX_T + 1e-3 && abs(q.x) < size.x - BOX_T + 1e-3;
           bool lying = shelf || q.y > size.y - BOX_T - 1e-3 || q.y < BOX_T + 1e-3; // top or bottom
           bool side = !lying && abs(q.x) > size.x - BOX_T - 1e-3;
-          vec2 g = (lying ? q.xz : side ? q.zy : q.xy) + (candle ? 13.0 : 0.0); // along the board, across it
+          vec2 g = (lying ? q.xz : side ? q.zy : q.xy) + (which == 1 ? 13.0 : which == 2 ? 29.0 : 0.0); // along the board, across it
           float a = 0.47 + 0.17 * (fbm(vec2(g.x * 2.5, g.y * 38.0 + fbm(g * 6.0) * 2.0)) - 0.5);
           a += 0.07 * (noise(vec2(g.x * 5.0, g.y * 160.0)) - 0.5);
           a *= 1.0 - 0.45 * edgeLine((lying ? q.z : q.y - 0.5 * size.y), 0.0025); // the joint between the two boards
           float inset = min(min(size.x - abs(q.x), size.z - abs(q.z)), min(q.y, size.y - q.y));
-          if (shelf) inset = min(size.z - abs(q.z), min(q.y - SHELF_Y, SHELF_Y + BOX_T - q.y));
+          if (shelf) inset = min(size.z - abs(q.z), min(q.y - shelfY, shelfY + BOX_T - q.y));
           a *= 1.0 - 0.3 * (1.0 - smoothstep(0.0, 0.004, inset));
           return a;
+        }
+        if (m == M_DBOOK) {
+          // the work station's books: rows standing spine-out (each a different cloth, a paler label
+          // on the spine, the pages showing along the top), ones lying flat (pages at the ends and the
+          // back), and the one leaning over
+          vec3 q = deskLocal(p);
+          for (int i = 0; i < DBOOK_N; i++) {
+            vec3 lo = DBOOK[2 * i], hi = DBOOK[2 * i + 1];
+            if (any(lessThan(q, lo - 1e-3)) || any(greaterThan(q, hi + 1e-3))) continue;
+            if (i < DBOOK_STANDING) {
+              if (q.y > hi.y - 1e-3) return 0.78 + 0.05 * (noise(vec2(q.x * 900.0, q.z * 60.0)) - 0.5); // the pages
+              float u = q.x * 36.0 + 0.6 * sin(q.x * 71.0) + 0.4 * sin(q.x * 157.0); // one book every 3 cm or so, not evenly
+              float id = floor(u), f = fract(u);
+              float a = 0.12 + 0.5 * hash2(vec2(id, 3.0 + float(i)));
+              a *= 1.0 - 0.4 * (1.0 - smoothstep(0.0, 0.08, min(f, 1.0 - f))); // the gap between two books
+              float band = lo.y + (hi.y - lo.y) * (0.25 + 0.45 * hash2(vec2(id, 9.0))); // a label on the spine
+              if (q.z < lo.z + 1e-3 && abs(q.y - band) < 0.009) a = mix(a, 0.8, 0.6);
+              return a + 0.02 * (noise(q.yz * 400.0) - 0.5);
+            }
+            bool pages = q.x < lo.x + 1e-3 || q.x > hi.x - 1e-3 || q.z > hi.z - 1e-3;
+            if (pages) return 0.8 + 0.05 * (noise(vec2(q.y * 1500.0, (q.x + q.z) * 40.0)) - 0.5);
+            return 0.15 + 0.5 * hash2(vec2(float(i), 5.0)) + 0.02 * (noise(q.xz * 300.0) - 0.5);
+          }
+          vec3 r = q - DBOOK_LEAN; // the leaning one
+          r.xy = vec2(LEAN_C * r.x - LEAN_S * r.y, LEAN_S * r.x + LEAN_C * r.y);
+          if (r.y > 0.229) return 0.78 + 0.05 * (noise(vec2(r.x * 900.0, r.z * 60.0)) - 0.5);
+          float a = 0.34;
+          if (r.z < -0.119 && abs(r.y - 0.15) < 0.009) a = 0.62;
+          return a + 0.02 * (noise(r.yz * 400.0) - 0.5);
+        }
+        if (m == M_LAPTOP) {
+          // brushed aluminium; the base's top has the keyboard sunk into it (black keys in a dark
+          // well) and the trackpad in front; the lid's face round the screen is black
+          vec3 q = lapLocal(deskLocal(p));
+          vec3 l = lidLocal(q);
+          if (l.y > 0.003 && l.z < 0.0015) return 0.02; // the bezel: very dark plastic (at 0.05 the candle 25 cm away lit it tan, and the lid's top vanished against the floor)
+          float a = 0.5 + 0.025 * (noise(vec2(q.x * 60.0, (q.y + q.z) * 900.0)) - 0.5);
+          if (q.y > LAP_T - 1e-3 && q.z < HINGE_Z - 0.006) {
+            vec2 k = q.xz - vec2(0.0, 0.043); // the keyboard's middle
+            if (abs(k.x) < 0.142 && abs(k.y) < 0.052) {
+              vec2 cell = vec2(0.0189, 0.0173);
+              vec2 f = abs(mod(k + 0.5 * cell, cell) - 0.5 * cell); // from the middle of the nearest key
+              bool cap = f.x < 0.5 * cell.x - 0.0011 && f.y < 0.5 * cell.y - 0.0011;
+              return cap ? 0.1 + 0.03 * (noise(k * 700.0) - 0.5) : 0.28;
+            }
+            if (abs(q.x) < 0.065 && q.z > -0.098 && q.z < -0.023)
+              return 0.5 - 0.2 * max(edgeLine(abs(q.x) - 0.065, 0.0008), edgeLine(min(q.z + 0.098, -0.023 - q.z), 0.0008)); // the trackpad, edged
+          }
+          return a;
+        }
+        if (m == M_SCREEN) return 0.012; // dark matt glass: its picture is light of its own (see screenLight)
+        if (m == M_PAPER) {
+          vec3 q = deskLocal(p);
+          for (int i = 0; i < PAPER_N; i++) {
+            vec4 s = PAPER[i];
+            if (abs(q.y - paperTop(i)) > 1e-4) continue;
+            float cs = cos(s.z), sn = sin(s.z);
+            vec2 r = q.xz - s.xy;
+            r = vec2(cs * r.x - sn * r.y, sn * r.x + cs * r.y);
+            if (abs(r.x) > PAPER_HW || abs(r.y) > PAPER_HL) continue;
+            vec2 uv = 0.5 * (vec2(0.5 * (r.x / PAPER_HW + 1.0), 0.5 * (1.0 - r.y / PAPER_HL)) + vec2(mod(s.w, 2.0), floor(s.w / 2.0)));
+            float ink = textureLod(uPaper, uv, 0.0).r;
+            return 0.84 * (1.0 - 0.72 * ink) + 0.03 * (noise(r * 700.0) - 0.5);
+          }
+          return 0.84;
+        }
+        if (m == M_PENCIL) {
+          vec3 q = deskLocal(p);
+          float along = (q.x + 0.145) / -0.09; // 0 at the point (its right end), 1 at the other end
+          return along < 0.035 ? 0.04 : along < 0.16 ? 0.72 : 0.6 + 0.08 * step(0.5, fract(atan(q.y - DESK_H - 0.0035, q.z + 0.115 + 0.667 * (q.x + 0.145)) * 0.955)); // lead, sharpened wood, the faceted body
         }
         if (m == M_BOOK) {
           // three hardbacks lying flat, spines out: dark cloth, a paler one, a mid one, with the
@@ -697,6 +1058,28 @@
           return length(q.xz - vec2(0.074, -0.09)) < 0.006 ? 0.04 : 0.62; // burnt head
         }
         if (m == M_WAX) return 0.86;
+        if (m == M_SOFA) {
+          // teddy fleece: pale grey, a curly pile, a little darker where the cover bunches
+          vec3 q = sofaLocal(p);
+          return 0.48 + 0.07 * (fbm(vec2(q.x * 6.0 + q.z * 3.0, q.y * 6.0 - q.z * 3.0)) - 0.5) + 0.03 * (noise(vec2(q.x * 90.0 + q.y * 70.0, q.z * 90.0 - q.y * 60.0)) - 0.5);
+        }
+        if (m == M_PILLOW) {
+          // a cream cover with a leafy grey print
+          vec3 q = sofaLocal(p);
+          float print = smoothstep(0.5, 0.62, fbm(vec2(q.x * 14.0 + q.z * 3.0, q.y * 14.0) + 5.0));
+          return mix(0.72, 0.40, print) + 0.03 * (noise(q.xy * 300.0) - 0.5);
+        }
+        if (m == M_DOG) {
+          // a black wiry coat, greyer on the beard, brow and legs (a schnauzer's furnishings)
+          vec3 q = sofaLocal(p);
+          vec3 h = q - HEAD_C;
+          float a = 0.055 + 0.03 * (noise(vec2(q.x * 350.0 + q.y * 300.0, q.z * 350.0 - q.y * 260.0)) - 0.5);
+          if (h.x > 0.03 && h.y < -0.035) a += 0.05; // the beard
+          if (h.x > 0.03 && h.x < 0.085 && h.y > 0.015 && abs(h.z) < 0.05) a += 0.03; // the brow
+          if (q.x > 0.37 && q.y < 0.585 && h.x < 0.0) a += 0.04; // the front legs
+          return a;
+        }
+        if (m == M_NOSE) return 0.03;
         if (m == M_SLEEVE) {
           // spines of different records, some thicker than others
           vec3 q = tableLocal(p);
@@ -779,7 +1162,7 @@
       vec3 surface(int m, vec3 p, vec3 n) {
         if (m == M_WAX) return vec3(0.87, 0.84, 0.77);
         if (m != M_GLASS) return vec3(albedo(m, p));
-        vec3 q = jarLocal(p);
+        vec3 q = jarLocal(p, nearestJar(p));
         if (n.y > 0.5) return vec3(0.12, 0.16, 0.3); // the rim
         if (dot(n.xz, q.xz) < 0.0) return vec3(0.03, 0.05, 0.13); // the inside of the wall, above the wax
         if (q.y < JAR_BASE) return vec3(0.1, 0.12, 0.18); // the thick clear base
@@ -791,13 +1174,18 @@
       // Candlelight coming through the glass: the wall above the wax glows with the flame behind
       // it, and below that the wax lets some through near the top. The gold ink blocks it.
       vec3 jarGlow(vec3 p, vec3 n) {
-        vec3 q = jarLocal(p);
+        vec3 q = jarLocal(p, nearestJar(p));
         if (n.y > 0.5 || dot(n.xz, q.xz) < 0.0) return vec3(0.0); // rim and inside are lit by the flame directly
         vec3 blue = vec3(0.22, 0.4, 1.0);
         if (q.y > WAX_Y) return 0.014 * blue;
         if (q.y < JAR_BASE) return 0.001 * CANDLE_RGB;
         vec2 uv = vec2(fract((atan(q.z, q.x) - LABEL_FACING) / (2.0 * PI) + 0.5), 1.0 - q.y / JAR_H);
         return 0.006 * exp(-(WAX_Y - q.y) / 0.02) * (1.0 - textureLod(uLabel, uv, 0.0).r) * blue;
+      }
+
+      // the laptop's screen lit up: the picture on it as light, a white pixel giving SCREEN_LE
+      float screenLight(vec3 p) {
+        return SCREEN_LE * pow(textureLod(uScreen, screenUV(lidLocal(lapLocal(deskLocal(p)))), 0.0).r, 2.2);
       }
 
       float emission(int m, vec3 p) {
@@ -891,40 +1279,66 @@
         return TUBE_LE * f * cosS * cosL * TUBE_AREA / (dist2 * (w / total));
       }
 
-      // The candle as a light: a point in the bright middle of its flame, at rest (the flicker is
+      // The candles as lights: a point in the bright middle of a flame, at rest (the flicker is
       // applied in post, so the light doesn't move in the loops). A candle wouldn't show at all
-      // against these tubes, so it is far stronger than a real one (set in post), and its fall-off
-      // is softened close to it so the board beside it isn't burnt out.
-      vec3 flamePoint() {
-        return jarWorld(vec3((rnd() * 2.0 - 1.0) * 0.002, FLAME_Y + FLAME_H * (0.2 + 0.45 * rnd()), (rnd() * 2.0 - 1.0) * 0.002));
+      // against these tubes, so they are far stronger than real ones (set in post), and their
+      // fall-off is softened close to them so what stands beside them isn't burnt out. Each point
+      // asks one candle, chosen by how strongly it would light it (its distance and its fade),
+      // and weights the answer by that choice; which candle it was decides the channel the light
+      // goes into, so post can flicker each on its own.
+      vec3 flamePoint(int i) {
+        return jarWorld(vec3((rnd() * 2.0 - 1.0) * 0.002, FLAME_Y + FLAME_H * (0.2 + 0.45 * rnd()), (rnd() * 2.0 - 1.0) * 0.002), i);
       }
 
-      float candleLight(vec3 p, vec3 n) {
-        vec3 v = flamePoint() - p;
-        float dist2 = dot(v, v);
+      // how strong candle i would be at p, without shadowing: the fall-off and the fade
+      float candleWeight(vec3 p, int i) {
+        float dist2 = dot(jarOrigin(i) - p, jarOrigin(i) - p);
         if (dist2 > CANDLE_REACH * CANDLE_REACH) return 0.0;
+        return (1.0 - smoothstep(0.6 * CANDLE_REACH, CANDLE_REACH, sqrt(dist2))) / (dist2 + CANDLE_SOFT * CANDLE_SOFT);
+      }
+
+      // picks a candle for p; false if none reaches it. The chance of the one picked is in share.
+      // (rnd() can come out as exactly 1, so a candle with no weight is never left to chance:
+      // dividing by its zero share would put an infinity in the frame.)
+      bool pickCandle(vec3 p, out int which, out float share) {
+        float w0 = candleWeight(p, 0), w1 = candleWeight(p, 1);
+        float total = w0 + w1;
+        which = 0;
+        share = 1.0;
+        if (total <= 0.0) return false;
+        which = w1 <= 0.0 || rnd() * total < w0 ? 0 : 1;
+        share = (which == 0 ? w0 : w1) / total;
+        return share > 0.0;
+      }
+
+      float candleLight(vec3 p, vec3 n, out int which) {
+        float share;
+        if (!pickCandle(p, which, share)) return 0.0;
+        vec3 v = flamePoint(which) - p;
+        float dist2 = dot(v, v);
         float dist = sqrt(dist2);
         vec3 dir = v / dist;
         float cosS = dot(n, dir);
         if (cosS <= 0.0) return 0.0;
         if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
         float fade = 1.0 - smoothstep(0.6 * CANDLE_REACH, CANDLE_REACH, dist);
-        return cosS * fade / ((dist2 + CANDLE_SOFT * CANDLE_SOFT) * PI);
+        return cosS * fade / ((dist2 + CANDLE_SOFT * CANDLE_SOFT) * PI * share);
       }
 
-      // ...and the flame seen in the floor's glossy reflection
-      float candleGlossy(vec3 p, vec3 n, vec3 r) {
-        vec3 v = flamePoint() - p;
+      // ...and a flame seen in the floor's glossy reflection
+      float candleGlossy(vec3 p, vec3 n, vec3 r, out int which) {
+        float share;
+        if (!pickCandle(p, which, share)) return 0.0;
+        vec3 v = flamePoint(which) - p;
         float dist2 = dot(v, v);
-        if (dist2 > CANDLE_REACH * CANDLE_REACH) return 0.0;
         float dist = sqrt(dist2);
         vec3 dir = v / dist;
         float cosS = dot(n, dir);
         float lobe = pow(max(0.0, dot(r, dir)), GLOSS_N);
         if (cosS <= 0.0 || lobe < 1e-5) return 0.0;
         if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
-        // the candle's boost is for what it lights; its reflection only needs to be a faint smudge
-        return 0.06 * (GLOSS_N + 2.0) / (2.0 * PI) * lobe * cosS / (dist2 + CANDLE_SOFT * CANDLE_SOFT);
+        // the candles' boost is for what they light; a reflection only needs to be a faint smudge
+        return 0.06 * (GLOSS_N + 2.0) / (2.0 * PI) * lobe * cosS / ((dist2 + CANDLE_SOFT * CANDLE_SOFT) * share);
       }
 
       vec3 phongSample(vec3 r) {
@@ -951,27 +1365,29 @@
         vec3 o = uCamPos;
         vec3 d = safeDir(normalize(uCamRight * (uv.x * uTanY * uRes.x / uRes.y) + uCamUp * (uv.y * uTanY) + uCamFwd));
 
-        // Two kinds of light are summed apart: the tubes' and the door's, and the candle's (its
-        // colour included, but not its strength or flicker, which post decides). The flame itself,
-        // seen straight on, is a third sum.
+        // Three kinds of light are summed apart: the tubes' and the door's, and each candle's (its
+        // colour included, but not its strength or flicker, which post decides). Each flame itself,
+        // seen straight on, goes in the alpha of its candle's sum.
         vec3 radiance = vec3(0.0);
-        vec3 candle = vec3(0.0);
-        float flame = 0.0;
+        vec3 candle0 = vec3(0.0), candle1 = vec3(0.0);
+        float flame0 = 0.0, flame1 = 0.0;
         vec3 throughput = vec3(1.0);
         bool countEmitters = true;
+        int which = 0;
         for (int bounce = 0; bounce < 4; bounce++) {
           Hit h = trace(o, d);
-          if (bounce == 0) flame += flameGlow(o, d, h.t);
+          if (bounce == 0) { flame0 += flameGlow(o, d, h.t, 0); flame1 += flameGlow(o, d, h.t, 1); }
           if (h.m == M_NONE) break;
           vec3 p = o + d * h.t;
 
           float e = emission(h.m, p);
           if (h.m == M_TUBE) { if (countEmitters) radiance += throughput * e; break; }
           if (e > 0.0) { radiance += throughput * e; break; }
+          if (h.m == M_SCREEN) radiance += throughput * screenLight(p); // the screen's own light; it goes on as a dark matt surface
 
           vec3 a = surface(h.m, p, h.n);
           vec3 n = h.n;
-          if (h.m == M_GLASS) candle += throughput * jarGlow(p, n);
+          if (h.m == M_GLASS) { vec3 glow = throughput * jarGlow(p, n); if (nearestJar(p) == 0) candle0 += glow; else candle1 += glow; }
 
           // sealed concrete, vinyl and glass: a faint, slightly blurry mirror, strongest at grazing angles
           bool record = h.m == M_RECORD && vinyl(p, n);
@@ -984,7 +1400,10 @@
               // a dark record shows every overbright sample as a white speck, so its highlights are capped
               float mirrored = glossyLight(p, n, r);
               radiance += throughput * (record ? min(mirrored, 3.0) : mirrored);
-              if (h.m == M_FLOOR && bounce < 2) candle += throughput * CANDLE_RGB * candleGlossy(p, n, r);
+              if (h.m == M_FLOOR && bounce < 2) {
+                vec3 smudge = throughput * CANDLE_RGB * candleGlossy(p, n, r, which);
+                if (which == 0) candle0 += smudge; else candle1 += smudge;
+              }
               d = safeDir(phongSample(r));
               if (dot(d, n) < 0.0) d = reflect(d, n);
               o = p + n * 2e-3;
@@ -994,17 +1413,26 @@
           }
 
           radiance += throughput * a * directLight(p, n);
-          // the candle's light only for the first two bounces: past that it is too faint to matter
-          if (bounce < 2) candle += throughput * a * CANDLE_RGB * candleLight(p, n);
+          // the candles' light only for the first two bounces: past that it is too faint to matter
+          if (bounce < 2) {
+            vec3 lit = throughput * a * CANDLE_RGB * candleLight(p, n, which);
+            if (which == 0) candle0 += lit; else candle1 += lit;
+          }
           throughput *= a;
           d = safeDir(cosineSample(n));
           o = p + n * 2e-3;
           countEmitters = false;
         }
 
+        // one bad sample must never poison a pixel's sum (post's blurs would spread it over the frame)
+        vec4 base = vec4(radiance, 0.0), c0 = vec4(candle0, flame0), c1 = vec4(candle1, flame1);
+        if (any(isnan(base)) || any(isinf(base))) base = vec4(0.0);
+        if (any(isnan(c0)) || any(isinf(c0))) c0 = vec4(0.0);
+        if (any(isnan(c1)) || any(isinf(c1))) c1 = vec4(0.0);
         vec2 pixel = gl_FragCoord.xy / uRes;
-        outBase = texture(uPrev, pixel) + vec4(radiance, flame);
-        outCandle = texture(uPrevCandle, pixel) + vec4(candle, 0.0);
+        outBase = texture(uPrev, pixel) + base;
+        outCandle = texture(uPrevCandle, pixel) + c0;
+        outCandle2 = texture(uPrevCandle2, pixel) + c1;
       }
     </script>
     <script>
@@ -1209,6 +1637,234 @@
         ctx.font = `${fit('BETTER WORLD', sans, 2.1 * cm) * 0.9}px ${sans}`
         ctx.fillText('BETTER WORLD', w / 2, fromFoot(2.5))
         ctx.fillText('FRAGRANCE HOUSE', w / 2, fromFoot(2.2))
+        return c
+      }
+
+      // GitHub's mark (the octicon, on a 16 × 16 grid)
+      const GITHUB_MARK = 'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'
+
+      // What the laptop's screen shows in the render: GitHub's mark on a dark screen, 16:10 like
+      // the lid. Up close the site lays its home screen over it. Red channel: how bright a pixel is.
+      function screenTexture() {
+        const w = 1600, h = 1000
+        const c = document.createElement('canvas')
+        c.width = w
+        c.height = h
+        const ctx = c.getContext('2d')
+        ctx.fillStyle = '#111'
+        ctx.fillRect(0, 0, w, h)
+        const size = 0.36 * h
+        ctx.translate((w - size) / 2, (h - size) / 2)
+        ctx.scale(size / 16, size / 16)
+        ctx.fillStyle = '#f4f4f4'
+        ctx.fill(new Path2D(GITHUB_MARK))
+        return c
+      }
+
+      // Sheets of A4 scribbled in pencil, for the floor round the work station and under the
+      // laptop: four drawings in a 2 × 2 atlas at 3 px to the mm — the Dirac equation with its gamma
+      // matrices, a Lorentz boost, a system design sketch, and a sequence diagram of how this site
+      // fetches what's playing, with a few more equations. Red channel: 0 = paper, 1 = pencil.
+      function paperTexture() {
+        const mm = 3, sw = 210 * mm, sh = 297 * mm
+        const c = document.createElement('canvas')
+        c.width = 2 * sw
+        c.height = 2 * sh
+        const ctx = c.getContext('2d')
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, c.width, c.height)
+        ctx.strokeStyle = ctx.fillStyle = 'rgba(255,255,255,0.85)'
+        ctx.lineCap = ctx.lineJoin = 'round'
+        ctx.lineWidth = 0.75 * mm
+        const font = '"Segoe Print", "Ink Free", "Comic Sans MS", cursive'
+        let seed = 7
+        const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+        const jitter = (k = 0.35 * mm) => (rnd() - 0.5) * 2 * k
+        // a pencil line that wanders a little, as a hand's does (mm from the sheet's top left)
+        const line = (x0, y0, x1, y1) => {
+          ctx.beginPath()
+          ctx.moveTo(x0 * mm + jitter(), y0 * mm + jitter())
+          const n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / 12))
+          for (let i = 1; i <= n; i++) {
+            const k = i / n
+            ctx.lineTo((x0 + (x1 - x0) * k) * mm + jitter(i < n ? 0.5 * mm : 0.35 * mm), (y0 + (y1 - y0) * k) * mm + jitter(i < n ? 0.5 * mm : 0.35 * mm))
+          }
+          ctx.stroke()
+        }
+        const arrow = (x0, y0, x1, y1) => {
+          line(x0, y0, x1, y1)
+          const a = Math.atan2(y1 - y0, x1 - x0), h = 3.5
+          line(x1, y1, x1 - h * Math.cos(a - 0.5), y1 - h * Math.sin(a - 0.5))
+          line(x1, y1, x1 - h * Math.cos(a + 0.5), y1 - h * Math.sin(a + 0.5))
+        }
+        const rect = (x, y, w, h) => {
+          line(x, y, x + w, y)
+          line(x + w, y, x + w, y + h)
+          line(x + w, y + h, x, y + h)
+          line(x, y + h, x, y)
+        }
+        const ellipse = (x, y, rx, ry) => {
+          ctx.beginPath()
+          for (let i = 0; i <= 40; i++) {
+            const a = (i / 40) * 2 * Math.PI
+            const px = (x + rx * Math.cos(a)) * mm + jitter(0.4 * mm), py = (y + ry * Math.sin(a)) * mm + jitter(0.4 * mm)
+            if (i) ctx.lineTo(px, py)
+            else ctx.moveTo(px, py)
+          }
+          ctx.stroke()
+        }
+        // Writing at size mm from (x, y) mm, a little off level. In maths, ^{...} raises and _{...}
+        // lowers what's inside. Returns the width in mm.
+        const write = (s, x, y, size = 7, angle = 0) => {
+          ctx.save()
+          ctx.translate(x * mm, y * mm)
+          ctx.rotate(angle + jitter(0.012))
+          ctx.font = `${size * mm}px ${font}`
+          let pen = 0
+          for (const [, base, sup, sub] of s.matchAll(/([^^_]+|\^|_)(?:(?<=\^)\{([^}]*)\}|(?<=_)\{([^}]*)\})?/g)) {
+            if (base === '^' || base === '_') {
+              const part = sup ?? sub ?? ''
+              ctx.font = `${0.62 * size * mm}px ${font}`
+              ctx.fillText(part, pen, base === '^' ? -0.45 * size * mm : 0.22 * size * mm)
+              pen += ctx.measureText(part).width + 0.5 * mm
+              ctx.font = `${size * mm}px ${font}`
+            } else {
+              ctx.fillText(base, pen, 0)
+              pen += ctx.measureText(base).width
+            }
+          }
+          ctx.restore()
+          return pen / mm
+        }
+        // a matrix in square brackets: rows of entries, colW mm apart; returns the width
+        const matrix = (rows, x, y, size, colW) => {
+          const rowH = 1.35 * size, w = rows[0].length * colW
+          const top = y - 0.85 * size, h = rows.length * rowH + 0.15 * size
+          line(x + 2, top, x, top)
+          line(x, top, x, top + h)
+          line(x, top + h, x + 2, top + h)
+          line(x + w + 1, top, x + w + 3, top)
+          line(x + w + 3, top, x + w + 3, top + h)
+          line(x + w + 3, top + h, x + w + 1, top + h)
+          rows.forEach((row, i) => row.forEach((entry, j) => write(entry, x + 2.5 + j * colW, y + i * rowH, size)))
+          return w + 4
+        }
+        const sheet = (i, draw) => {
+          ctx.save()
+          ctx.translate((i % 2) * sw, Math.floor(i / 2) * sh)
+          draw()
+          ctx.restore()
+        }
+
+        sheet(0, () => {
+          write('Dirac eqn', 22, 28, 10)
+          line(21, 32, 62, 33)
+          write('(iγ^{μ}∂_{μ} − m)ψ = 0', 32, 60, 12)
+          rect(27, 46, 118, 21)
+          let w = write('γ^{0} = ', 22, 96, 8)
+          w += matrix([['I', '0'], ['0', '−I']], 22 + w, 96, 8, 13)
+          write('γ^{i} = ', 22 + w + 10, 96, 8)
+          matrix([['0', 'σ^{i}'], ['−σ^{i}', '0']], 22 + w + 26, 96, 8, 15)
+          write('{γ^{μ}, γ^{ν}} = 2η^{μν}', 24, 138, 8)
+          write('ψ = u(p) e^{−ip·x}', 24, 162, 8)
+          write('E = ±√(p^{2}c^{2} + m^{2}c^{4})', 24, 190, 8)
+          write('→ antimatter!', 120, 205, 7, -0.15)
+          ellipse(148, 202, 22, 8)
+          write('(iγ^{μ}∂_{μ} + m)ψ = 0 ?', 30, 236, 8)
+          line(28, 233, 132, 238)
+          write('spin ½', 130, 262, 8)
+          ellipse(140, 260, 16, 8)
+          line(40, 270, 60, 285)
+          line(60, 270, 40, 285)
+        })
+        sheet(1, () => {
+          write('boost along x', 20, 26, 9)
+          line(19, 30, 74, 31)
+          let w = write('Λ^{μ}_{ν} = ', 20, 66, 9)
+          matrix([['γ', '−βγ', '0', '0'], ['−βγ', 'γ', '0', '0'], ['0', '0', '1', '0'], ['0', '0', '0', '1']], 20 + w, 52, 8, 19)
+          write('β = v/c,  γ = 1/√(1 − β^{2})', 22, 118, 8)
+          write('η_{μν} = diag(+, −, −, −)', 22, 140, 8)
+          write("x'^{μ} = Λ^{μ}_{ν} x^{ν}", 22, 164, 8)
+          write('ds^{2} = c^{2}dt^{2} − dx^{2} − dy^{2} − dz^{2}', 22, 188, 8)
+          // a light cone
+          arrow(120, 285, 120, 218)
+          arrow(80, 265, 170, 265)
+          line(88, 300, 152, 232)
+          line(152, 300, 88, 232)
+          write('t', 124, 224, 6)
+          write('x', 166, 274, 6)
+          write('light cone', 128, 244, 5, -0.7)
+          write('c = 1', 24, 240, 7)
+          ellipse(32, 238, 14, 7)
+        })
+        sheet(2, () => {
+          write('system design', 20, 26, 9)
+          line(19, 30, 84, 31)
+          rect(20, 44, 34, 16)
+          write('client', 24, 55, 6)
+          arrow(54, 52, 76, 52)
+          rect(76, 44, 30, 16)
+          write('CDN', 82, 55, 6)
+          arrow(106, 52, 128, 52)
+          rect(128, 40, 46, 24)
+          write('load', 136, 50, 6)
+          write('balancer', 132, 59, 6)
+          for (const [k, x] of [[0, 96], [1, 128], [2, 160]]) {
+            arrow(151, 64, x + 14, 88)
+            rect(x, 88, 28, 16)
+            write(`api ${k + 1}`, x + 4, 99, 6)
+          }
+          write('stateless!', 40, 100, 6, -0.1)
+          arrow(110, 104, 78, 138)
+          rect(50, 138, 40, 18)
+          write('cache', 56, 150, 6)
+          write('redis', 58, 162, 5)
+          arrow(142, 104, 142, 132)
+          ellipse(142, 134, 18, 4)
+          line(124, 134, 124, 158)
+          line(160, 134, 160, 158)
+          ellipse(142, 158, 18, 4)
+          write('postgres', 128, 149, 5)
+          arrow(174, 104, 176, 176)
+          rect(158, 176, 40, 16)
+          write('queue', 165, 187, 6)
+          arrow(178, 192, 178, 214)
+          rect(160, 214, 36, 16)
+          write('worker', 164, 225, 6)
+          write('ttl 10 s', 22, 176, 6)
+          ellipse(32, 174, 14, 6)
+          write('rate limit?', 22, 198, 6)
+          write('idempotent', 30, 228, 6)
+          ellipse(46, 226, 22, 7)
+          write('retry w/ backoff', 96, 250, 6)
+          arrow(126, 244, 176, 232)
+        })
+        sheet(3, () => {
+          write('now playing', 20, 26, 9)
+          line(19, 30, 74, 31)
+          for (const [name, x] of [['browser', 30], ['api', 100], ['spotify', 165]]) {
+            write(name, x - 10, 48, 6)
+            line(x, 52, x, 170)
+          }
+          arrow(30, 66, 100, 66)
+          write('GET /api/now-playing', 36, 62, 4.5)
+          arrow(100, 86, 165, 86)
+          write('refresh token', 106, 82, 4.5)
+          arrow(165, 104, 100, 104)
+          write('access token', 108, 100, 4.5)
+          arrow(100, 122, 165, 122)
+          write('GET /me/player', 108, 118, 4.5)
+          arrow(165, 140, 100, 140)
+          write('200 {item}', 112, 136, 4.5)
+          arrow(100, 158, 30, 158)
+          write('{track, artist, art}', 34, 154, 4.5)
+          write('poll every 10 s', 24, 182, 6)
+          ellipse(46, 180, 26, 7)
+          write('iħ ∂_{t}ψ = Ĥψ', 24, 218, 8)
+          write('[x̂, p̂] = iħ', 24, 242, 8)
+          write('∂_{μ}F^{μν} = μ_{0}J^{ν}', 24, 266, 8)
+          write('∇·B = 0', 120, 242, 8)
+        })
         return c
       }
 
@@ -1526,13 +2182,13 @@
         gl.enableVertexAttribArray(aPos)
         gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
 
-        // two ping-pong targets, each with two float textures: the tubes' light and the flame (0),
-        // and the candle's light (1)
+        // two ping-pong targets, each with three float textures: the tubes' light (0), and each
+        // candle's light with its flame (1, 2)
         gl.clearColor(0, 0, 0, 0)
         const targets = [0, 1].map(() => {
           const fb = gl.createFramebuffer()
           gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
-          const tex = [0, 1].map((k) => {
+          const tex = [0, 1, 2].map((k) => {
             const t = gl.createTexture()
             gl.bindTexture(gl.TEXTURE_2D, t)
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, W, H, 0, gl.RGBA, gl.FLOAT, null)
@@ -1541,7 +2197,7 @@
             gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, t, 0)
             return t
           })
-          gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+          gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2])
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('float render target incomplete')
           gl.clear(gl.COLOR_BUFFER_BIT)
           return { tex, fb }
@@ -1561,6 +2217,8 @@
         texture(1, 'uBoard', boardTexture())
         texture(3, 'uBoard2', boardTexture({ writing: false }))
         texture(5, 'uLabel', labelTexture())
+        texture(6, 'uScreen', screenTexture())
+        texture(7, 'uPaper', paperTexture())
 
         const letters = hangingLetters()
         const lettersTex = gl.createTexture()
@@ -1581,22 +2239,30 @@
         gl.uniform2f(uniform('uRes'), W, H)
         gl.uniform1i(uniform('uPrev'), 0)
         gl.uniform1i(uniform('uPrevCandle'), 4)
+        gl.uniform1i(uniform('uPrevCandle2'), 8)
         const uFrame = uniform('uFrame')
 
         // The record turns 3 times per loop (30 rpm, near enough to 33⅓) so the loop is seamless.
         const SPIN_REVS = 3
-        // The candle breathes: its light's strength over time is 1 plus a few sines, each a whole
+        // The candles breathe: each one's light over time is 1 plus a few sines, each a whole
         // number of cycles per loop so the loops stay seamless ([amplitude, cycles per loop,
-        // phase]). Post scales the candle's light by it; the flame stretches with it and its tip
-        // wanders. The site reads the same numbers to flicker the light it adds to its own
-        // things (the prints, the album cover).
+        // phase]); the second candle has the same sines at other phases, so the two never flicker
+        // in step. Post scales each candle's light by its own; a flame stretches with it and its
+        // tip wanders. The site reads the first candle's numbers to flicker the light it adds to
+        // its own things (the prints, the album cover).
         const FLICKER = [[0.045, 2, 0.4], [0.03, 5, 2.1], [0.024, 11, 4.4], [0.018, 17, 1.3], [0.012, 29, 5.2]]
-        const flicker = (t) => 1 + FLICKER.reduce((sum, [amp, cycles, phase]) => sum + amp * Math.sin((2 * Math.PI * cycles * t) / letters.loop + phase), 0)
+        const FLICKERS = [FLICKER, FLICKER.map(([amp, cycles, phase]) => [amp, cycles, (phase + 2.7) % (2 * Math.PI)])]
+        const flicker = (t, i = 0) => 1 + FLICKERS[i].reduce((sum, [amp, cycles, phase]) => sum + amp * Math.sin((2 * Math.PI * cycles * t) / letters.loop + phase), 0)
         const wave = (t, cycles, phase) => Math.sin((2 * Math.PI * cycles * t) / letters.loop + phase)
         // Everything that moves, at t seconds: the letters' pose (see hangingLetters), the
-        // record's angle and the flame. Returns the letters' box, which already covers their whole swing.
+        // record's angle, the flames, and the dog's ribs (two slow breaths per loop, as a dog
+        // asleep breathes). Returns the letters' box, which already covers their whole swing.
         const setTime = (t) => {
-          gl.uniform4f(uniform('uFlame'), 0.0011 * wave(t, 3, 1.0) + 0.0005 * wave(t, 7, 2.5), 0.0008 * wave(t, 4, 0.3), 1 + 0.8 * (flicker(t) - 1), 0)
+          gl.uniform4fv(uniform('uFlame'), [
+            0.0011 * wave(t, 3, 1.0) + 0.0005 * wave(t, 7, 2.5), 0.0008 * wave(t, 4, 0.3), 1 + 0.8 * (flicker(t, 0) - 1), 0,
+            0.001 * wave(t, 4, 2.2) + 0.0005 * wave(t, 9, 0.7), 0.0009 * wave(t, 3, 3.9), 1 + 0.8 * (flicker(t, 1) - 1), 0,
+          ])
+          gl.uniform1f(uniform('uBreath'), 1 + 0.045 * wave(t, 2, 0))
           const p = letters.pose(((t % letters.loop) + letters.loop) % letters.loop)
           gl.uniform4fv(uniform('uLetterHang'), p.hang)
           gl.uniform4fv(uniform('uLetterSize'), p.size)
@@ -1622,7 +2288,17 @@
         const board2 = (p) => yawWorld(vec('BOARD2_POS'), num('BOARD2_C'), num('BOARD2_S'), p)
         const table = (p) => yawWorld(vec('TABLE_POS'), num('TABLE_C'), num('TABLE_S'), p)
         const crate = (p) => yawWorld(vec('CANDLE_TABLE_POS'), num('BOARD2_C'), num('BOARD2_S'), p)
+        const sofa = (p) => yawWorld(vec('SOFA_POS'), num('SOFA_C'), num('SOFA_S'), p)
+        const desk = (p) => yawWorld(vec('DESK_POS'), num('DESK_C'), num('DESK_S'), p)
         const candleC = vec('CANDLE_C'), crateH = num('CRATE_H'), flameY = num('FLAME_Y'), flameH = num('FLAME_H')
+        const deskJar = vec('DESK_JAR'), deskH = num('DESK_H'), jarH = num('JAR_H')
+        const headC = vec('HEAD_C')
+        // the laptop's lid, from the crate's frame: a point x across the lid, v up it from the hinge
+        const lapC = vec('LAP_C'), lapT = num('LAP_T'), hingeZ = num('HINGE_Z'), lidC = num('LID_C'), lidS = num('LID_S')
+        const lapHW = num('LAP_HW'), lidH = num('LID_H'), bezelX = num('BEZEL_X'), bezelLo = num('BEZEL_LO'), bezelHi = num('BEZEL_HI')
+        const lid = (x, v) => desk([lapC[0] + x, deskH + lapT + lidC * v, lapC[1] + hingeZ + lidS * v])
+        // where each candle's flame is: the jars' frames in the world (see jarOrigin in the shader)
+        const jars = [crate([candleC[0], crateH, candleC[1]]), desk([deskJar[0], deskH, deskJar[1]])]
         const halfW = num('BOARD_HALF_W'), y0 = num('BOARD_Y0'), y1 = y0 + num('BOARD_H')
         const [recX, recZ] = vec('REC_C'), recY = num('REC_Y')
         // A 12" sleeve standing on the floor, leaning back against the box's right side (+x in
@@ -1650,20 +2326,42 @@
             [sleeveFootX + 0.12, 0, sleeveZ + sleeve / 2 + 0.04],
             [sleeveFootX + 0.12, 0, sleeveZ - sleeve / 2 - 0.04],
           ].map((p) => round(table(p))),
-          // the middle of the candle's flame, where its light comes from
-          candle: round(crate([candleC[0], crateH + flameY + 0.4 * flameH, candleC[1]])),
           // the corners of everything in the music corner: the box and player, the board on its stand, and the candle on its crate
           musicCorner: [
             ...boxCorners([-0.3, 0, -0.25], [0.3, 0.68, 0.25]).map(table),
             ...boxCorners([-1.15, 0, -0.33], [1.15, 1.98, 0.33]).map(board2),
-            ...boxCorners([-0.18, 0, -0.16], [0.18, crateH + num('JAR_H') + 0.03, 0.16]).map(crate),
+            ...boxCorners([-0.18, 0, -0.16], [0.18, crateH + jarH + 0.03, 0.16]).map(crate),
           ].map(round),
+          // the corners of the box round the sofa and the dog (nothing on the site uses them yet: for a hotspot one day)
+          sofa: boxCorners([-0.84, 0, -0.47], [0.84, 0.92, 0.48]).map(sofa).map(round),
+          // the top of the dog's head, where his Zs would rise from
+          dogHead: round(sofa([headC[0], headC[1] + 0.07, headC[2]])),
+          // the laptop's screen (inside the bezel), seen from the front: top left, top right, bottom right, bottom left
+          laptopScreen: [
+            lid(-lapHW + bezelX, lidH - bezelHi),
+            lid(lapHW - bezelX, lidH - bezelHi),
+            lid(lapHW - bezelX, bezelLo),
+            lid(-lapHW + bezelX, bezelLo),
+          ].map(round),
+          // the corners of the box round the work station: the crate with the laptop and candle on it, and the papers round its feet
+          workstation: boxCorners([-0.6, 0, -0.8], [0.68, deskH + 0.24, 0.24]).map(desk).map(round),
         }
-        // the candle's patch in the loops: the top of its crate, the jar and the flame, wherever it sways
-        const candleBox = (() => {
-          const pts = boxCorners([-0.17, crateH - 0.02, -0.15], [0.17, crateH + flameY + 1.3 * flameH, 0.15]).map(crate)
+        // the dog's patch in the loops: his ribs and what blends into them (the smin reaches 8 cm), wherever his
+        // breathing takes them — not his head, paws or tail, which don't move (a box round all of him reached into
+        // the edge of the laptop close-up, where only the sofa's arm shows, and cost that loop twenty minutes)
+        const dogBox = (() => {
+          const pts = boxCorners([-0.05, 0.41, -0.3], [0.45, 0.83, 0.1]).map(sofa)
           return boxCorners([0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i]))), [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i]))))
         })()
+        // each candle's patch in the loops: just its flame, wherever it sways and stretches — nothing else
+        // about a candle moves between frames (its light's position is fixed and its flicker is done in
+        // post), and up close the jar's whole box made the laptop loop's patch twenty times the size
+        const candleBoxes = jars.map((jar, i) => {
+          const yaw = i === 0 ? [num('BOARD2_C'), num('BOARD2_S')] : [num('DESK_C'), num('DESK_S')]
+          // (yawWorld takes y as it is, so the jar's height goes into the corners, not the origin)
+          const pts = boxCorners([-0.012, jar[1] + flameY - 0.005, -0.012], [0.012, jar[1] + flameY + 1.3 * flameH, 0.012]).map((p) => yawWorld(jar, yaw[0], yaw[1], p))
+          return boxCorners([0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i]))), [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i]))))
+        })
         const recordBox = (() => {
           const pts = boxCorners([recX - 0.16, 0.59, recZ - 0.16], [recX + 0.16, recY + 0.015, recZ + 0.16]).map(table)
           return boxCorners([0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i]))), [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i]))))
@@ -1689,6 +2387,8 @@
             const src = targets[current]
             const dst = targets[1 - current]
             gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fb)
+            gl.activeTexture(gl.TEXTURE8)
+            gl.bindTexture(gl.TEXTURE_2D, src.tex[2])
             gl.activeTexture(gl.TEXTURE4)
             gl.bindTexture(gl.TEXTURE_2D, src.tex[1])
             gl.activeTexture(gl.TEXTURE0)
@@ -1711,9 +2411,9 @@
           gl.disable(gl.SCISSOR_TEST)
           return targets[current]
         }
-        // reads a rectangle of both sums (GL coordinates) out of the target accumulate returned
+        // reads a rectangle of all three sums (GL coordinates) out of the target accumulate returned
         const readSums = (target, x, y, w, h) => {
-          const sums = [0, 1].map((k) => {
+          const sums = [0, 1, 2].map((k) => {
             const data = new Float32Array(w * h * 4)
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.fb)
             gl.readBuffer(gl.COLOR_ATTACHMENT0 + k)
@@ -1731,28 +2431,35 @@
         // decided here rather than in the shader, so it can be tuned (studio.grade) without
         // rendering again, and so it can flicker frame by frame over the same samples.
         const grade = {
-          candle: 22, // the candle's light
-          flame: 1.0, // the flame seen straight on
+          candle: 22, // the music candle's light
+          candle2: 12, // the work station's candle's light: the same candle, but a metre from the tagline board's chalk, which its full strength glared out
+          flame: 1.0, // the flames seen straight on
           flameRGB: [1.0, 0.7, 0.32],
           halo: 0.5, // the glow round the flame
           debugCandleOnly: false, // leave out the tubes' light, to see just the candle's
         }
 
         // Flip to top-down rows, average the samples and mix the lights: the tubes' light as it
-        // is, the candle's scaled by its strength at time t; the flame on its own.
-        const mix = ([base, candle], spp, t) => {
+        // is, each candle's scaled by its strength at time t; the flames on their own.
+        const mix = ([base, candle, candle2], spp, t) => {
           const rgb = new Float32Array(W * H * 3), flame = new Float32Array(W * H)
-          const k = (grade.candle * flicker(t)) / spp, f = (grade.flame * flicker(t)) / spp
+          const k = (grade.candle * flicker(t, 0)) / spp, f = (grade.flame * flicker(t, 0)) / spp
+          const k2 = (grade.candle2 * flicker(t, 1)) / spp, f2 = (grade.flame * flicker(t, 1)) / spp
           const b = grade.debugCandleOnly ? 0 : 1 / spp
+          let bad = 0
           for (let y = 0; y < H; y++) {
             for (let x = 0; x < W; x++) {
               const s = (y * W + x) * 4, i = (H - 1 - y) * W + x
-              rgb[i * 3] = base[s] * b + candle[s] * k
-              rgb[i * 3 + 1] = base[s + 1] * b + candle[s + 1] * k
-              rgb[i * 3 + 2] = base[s + 2] * b + candle[s + 2] * k
-              flame[i] = base[s + 3] * f
+              rgb[i * 3] = base[s] * b + candle[s] * k + candle2[s] * k2
+              rgb[i * 3 + 1] = base[s + 1] * b + candle[s + 1] * k + candle2[s + 1] * k2
+              rgb[i * 3 + 2] = base[s + 2] * b + candle[s + 2] * k + candle2[s + 2] * k2
+              flame[i] = candle[s + 3] * f + candle2[s + 3] * f2
+              // a pixel that isn't a number would blacken everything right of and below it in the blurs
+              for (let c = 0; c < 3; c++) if (!Number.isFinite(rgb[i * 3 + c])) { rgb[i * 3 + c] = 0; bad++ }
+              if (!Number.isFinite(flame[i])) { flame[i] = 0; bad++ }
             }
           }
+          if (bad) console.warn(`${bad} non-finite values in the sums, zeroed`)
           return { rgb, flame }
         }
 
@@ -1854,23 +2561,27 @@
         let still = null
 
         return {
-          // what render.mjs needs to know besides the pictures; the candle's numbers are for the
-          // site, which lights its own things by the same candle
+          // what render.mjs needs to know besides the pictures; the candles' numbers are for the
+          // site, which lights its own things by the same candles
           info: () => ({
             gpu,
             loopSeconds: letters.loop,
             anchors,
             candle: {
-              flicker: FLICKER,
+              flicker: FLICKER, // the first candle's, the one by the music board: the site's overlays are lit mostly by it
               strength: grade.candle,
               soft: num('CANDLE_SOFT'),
+              reach: num('CANDLE_REACH'),
               rgb: CANDLE_RGB,
-              // the jar's rim (height, radius) and the heights its light comes from (see flamePoint), so the site can tell how much of the flame clears the rim
-              jar: {
-                rim: +(crateH + num('JAR_H')).toFixed(4),
-                radius: num('JAR_R'),
-                light: [0.2, 0.65].map((k) => +(crateH + flameY + k * flameH).toFixed(4)),
-              },
+              radius: num('JAR_R'), // of a jar
+              // each candle: the middle of its flame (where its light comes from), the height of its jar's rim, and the heights its
+              // light comes from (see flamePoint), so the site can tell how much of the flame clears the rim from a point
+              jars: jars.map((jar, i) => ({
+                flame: round([jar[0], jar[1] + flameY + 0.4 * flameH, jar[2]]),
+                strength: i === 0 ? grade.candle : grade.candle2,
+                rim: +(jar[1] + jarH).toFixed(4),
+                light: [0.2, 0.65].map((k) => +(jar[1] + flameY + k * flameH).toFixed(4)),
+              })),
             },
           }),
 
@@ -1888,7 +2599,8 @@
 
           // A still from camera ({ pos, target, fov }) at time t (seconds), at the page's spp,
           // with the given exposure or, if none, the automatic one. Also works out which
-          // patches of the frame move in its loop: the letters and the record, where visible.
+          // patches of the frame move in its loop: the letters, the record, the flame and the
+          // dog's chest, where visible.
           async still({ camera, time = 0, exposure }) {
             const cam = lookAt(camera)
             setCamera(cam)
@@ -1898,7 +2610,7 @@
             const renderMs = Math.round(performance.now() - started)
             const auto = autoExposure(raw)
             const used = exposure ?? auto
-            const patches = [boxCorners(pose.min, pose.max), recordBox, candleBox].map((corners) => screenRect(cam, corners)).filter(Boolean)
+            const patches = [boxCorners(pose.min, pose.max), recordBox, ...candleBoxes, dogBox].map((corners) => screenRect(cam, corners)).filter(Boolean)
             still = { cam, time, raw, exposure: used, patches }
             return { camera: cam, exposure: used, autoExposure: auto, patches, renderMs, jpeg: filmLook(mix(raw, SPP, time), used).toDataURL('image/jpeg', 0.84) }
           },
@@ -1915,7 +2627,7 @@
             setTime(t)
             for (const c of patches) {
               const sums = readSums(await accumulate(c.x, c.y, c.w, c.h, SPP), c.x, c.y, c.w, c.h)
-              for (let k = 0; k < 2; k++) {
+              for (let k = 0; k < 3; k++) {
                 for (let r = 0; r < c.h; r++) raw[k].set(sums[k].subarray(r * c.w * 4, (r + 1) * c.w * 4), ((c.y + r) * W + c.x) * 4)
               }
             }
@@ -1948,6 +2660,14 @@
           // debug: the chalk textures of the two boards
           board(writing = true) {
             return { jpeg: boardTexture({ writing }).toDataURL('image/jpeg', 0.92) }
+          },
+
+          // debug: the laptop's screen and the sheets of paper
+          screen() {
+            return { jpeg: screenTexture().toDataURL('image/jpeg', 0.92) }
+          },
+          paper() {
+            return { jpeg: paperTexture().toDataURL('image/jpeg', 0.92) }
           },
         }
       }

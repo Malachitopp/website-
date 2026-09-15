@@ -79,8 +79,8 @@
   pointer-events: none;
 }
 
-/* From the overview the whole corner is a button; it glows a little under the pointer */
-.music-hotspot {
+/* From the overview each thing you can walk up to is a button; it glows a little under the pointer */
+.studio-hotspot {
   position: absolute;
   padding: 0;
   border: 0;
@@ -659,7 +659,198 @@
   }
 }
 
+/* ---- the work station (Workstation.tsx): the laptop's screen ---- */
+
+/* The screen inside the laptop's bezel at 4 px = 1 mm, laid onto the rendered screen by
+   planeTransform like the board. --px is how big one of its px is on the real screen at the
+   close-up, so text and icons can be given real sizes that read on a phone as on a monitor. */
+.laptop-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1192px;
+  height: 745px;
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  color: #f2f2f2;
+  background: #111;
+  transform-origin: 0 0;
+  pointer-events: auto;
+}
+
+/* what the render shows: the mark on a dark screen, drawn again exactly over it, then it wakes */
+.lock-screen {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #111;
+  animation: lock-away 0.5s 0.4s ease-in both;
+
+  & svg {
+    width: 36%;
+    aspect-ratio: 1;
+    fill: #f4f4f4;
+  }
+}
+
+@keyframes lock-away {
+  to {
+    opacity: 0;
+    scale: 1.06;
+    visibility: hidden;
+  }
+}
+
+.home-screen {
+  position: absolute;
+  inset: 0;
+  animation: home-wake 0.6s 0.45s ease-out both;
+}
+
+/* The candle burns just left of the screen: in the render its light washes the screen's glass warm
+   from that side, so the same wash is laid over the lock screen and the home screen, or they would
+   look cut out of the picture */
+.lock-screen::after,
+.home-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, rgb(255 196 120 / 0.34), rgb(255 190 110 / 0.14) 40%, rgb(255 190 110 / 0.04) 75%);
+  pointer-events: none;
+}
+
+@keyframes home-wake {
+  from {
+    opacity: 0;
+    scale: 1.03;
+  }
+}
+
+/* the wallpaper is the studio itself, dimmed */
+.home-wallpaper {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.42) saturate(0.7);
+  user-select: none;
+}
+
+.home-bar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  gap: 1em;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 0 calc(12px / var(--px));
+  height: calc(28px / var(--px));
+  font-size: calc(13px / var(--px));
+  font-weight: 600;
+  line-height: 1;
+  background: rgb(20 20 20 / 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.home-bar-name,
+.home-clock {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-clock {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+}
+
+/* the shortcuts, laid out from the top left like icons on a desktop */
+.home-icons {
+  position: absolute;
+  top: calc(28px / var(--px) + 22px / var(--px));
+  left: calc(22px / var(--px));
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(16px / var(--px));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(6px / var(--px));
+  width: calc(84px / var(--px));
+  padding: calc(6px / var(--px)) 0;
+  color: inherit;
+  text-decoration: none;
+  border-radius: calc(8px / var(--px));
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:focus-visible {
+    background: rgb(255 255 255 / 0.14);
+    outline: none;
+  }
+
+  &:focus-visible .home-tile {
+    box-shadow: 0 0 0 calc(3px / var(--px)) #fff;
+  }
+
+  &:active .home-tile {
+    scale: 0.94;
+  }
+}
+
+/* an app tile: the mark on a dark rounded square */
+.home-tile {
+  display: grid;
+  place-items: center;
+  width: calc(56px / var(--px));
+  height: calc(56px / var(--px));
+  background: linear-gradient(160deg, #3a3a3a, #161616);
+  border-radius: 22%;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 calc(4px / var(--px)) calc(10px / var(--px)) rgb(0 0 0 / 0.5);
+  transition: scale 0.1s;
+
+  & svg {
+    width: 68%;
+    height: 68%;
+    fill: #f4f4f4;
+  }
+}
+
+.home-label {
+  max-width: 100%;
+  font-size: calc(12px / var(--px));
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .lock-screen {
+    display: none;
+  }
+
+  .home-screen {
+    animation: none;
+  }
+
   .note {
     opacity: 0.9;
     animation: none;

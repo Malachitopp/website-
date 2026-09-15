@@ -9,31 +9,45 @@ export type Vec3 = [number, number, number]
 // fwd + x·right + y·up, where y goes from -tanY to tanY across the height of the frame.
 export type Camera = { pos: Vec3; right: Vec3; up: Vec3; fwd: Vec3; tanY: number }
 
+// The things in the studio you can walk up to
+export type CloseUp = 'music' | 'laptop'
+
+// A walk from the overview to a close-up: one camera per frame of the walk-in video (the walk
+// out plays them backwards)
+export type Walk = { seconds: number; fps: number; cameras: Camera[] }
+
 export type Framing = {
   size: [number, number] // the rendered frame, px
   overview: Camera
   music: Camera
-  walk: Camera[] // one per frame of the walk-in video (the walk out plays them backwards)
+  laptop: Camera
+  walks: Record<CloseUp, Walk>
 }
 
 export type Scene = {
   loopSeconds: number
-  walk: { seconds: number; fps: number }
+  walkFps: number
   anchors: {
     musicBoard: [Vec3, Vec3, Vec3, Vec3] // the music board's slate: top left, top right, bottom right, bottom left
     record: Vec3 // the middle of the top of the record
     albumCover: [Vec3, Vec3, Vec3, Vec3] // a sleeve leaning on the box's right side, same corner order
     albumShadow: [Vec3, Vec3, Vec3, Vec3] // the floor under it, from the box's side outwards
-    candle: Vec3 // the middle of the candle's flame
     musicCorner: Vec3[] // corners of everything in the music corner
+    sofa: Vec3[] // corners of the box round the sofa left of the tagline board, with the dog asleep on it (nothing uses it yet)
+    dogHead: Vec3 // the top of the dog's head
+    laptopScreen: [Vec3, Vec3, Vec3, Vec3] // the laptop's screen inside its bezel, same corner order as the board
+    workstation: Vec3[] // corners of the box round the work station: the crate, the laptop and candle on it, the papers round it
   }
-  // The candle's light as the renderer does it, so the page can light its own things the same way
+  // The candles' light as the renderer does it, so the page can light its own things the same way
   candle: {
-    flicker: [number, number, number][] // its strength over time: 1 + Σ amplitude · sin(2π · cycles · t / loop + phase)
+    flicker: [number, number, number][] // the music candle's strength over time: 1 + Σ amplitude · sin(2π · cycles · t / loop + phase)
     strength: number
-    soft: number // m, softens the fall-off close to it
+    soft: number // m, softens the fall-off close to a candle
+    reach: number // m, beyond which a candle adds nothing (it fades out over the last 40 % of this)
     rgb: [number, number, number]
-    jar: { rim: number; radius: number; light: [number, number] } // the rim's height and radius, and the heights the light comes from (m)
+    radius: number // of a jar
+    // each candle: the middle of its flame (where its light comes from), its own strength, its jar's rim height, and the heights the light comes from (m)
+    jars: { flame: Vec3; strength: number; rim: number; light: [number, number] }[]
   }
   landscape: Framing
   portrait: Framing
@@ -61,31 +75,41 @@ export function quadNormal([tl, tr, , bl]: Vec3[]): Vec3 {
   return [n[0] / length, n[1] / length, n[2] / length]
 }
 
-// How strong the candle's light is t seconds into the scene's time (the renderer's time: 0 is the
-// overview's still)
+// How strong the music candle's light is t seconds into the scene's time (the renderer's time: 0
+// is the overview's still). The overlays it lights are all by that candle; the other one on the
+// work station has its own flicker in the render.
 export function candleFlicker(t: number) {
   return scene.candle.flicker.reduce((sum, [amp, cycles, phase]) => sum + amp * Math.sin((2 * Math.PI * cycles * t) / scene.loopSeconds + phase), 1)
 }
 
-// How much of the light falling on a point (facing along normal) is the candle's, from 0 to 1:
-// its light worked out as the renderer's shader does (candleLight), against the tubes' light on
-// a surface standing up in the hall (TUBE_LIGHT, in the same units: the tubes straight onto the
-// music board's face come to 0.18, integrated as directLight does, and about as much again
-// bounces off the floor and walls). Low down, the jar's rim hides part of the flame, as it does
-// in the render.
+// How much of the light falling on a point (facing along normal) is the candles', from 0 to 1:
+// each candle's light worked out as the renderer's shader does (candleLight), against the tubes'
+// light on a surface standing up in the hall (TUBE_LIGHT, in the same units: the tubes straight
+// onto the music board's face come to 0.18, integrated as directLight does, and about as much
+// again bounces off the floor and walls). Low down, a jar's rim hides part of its flame, as it
+// does in the render.
 const TUBE_LIGHT = 0.45
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
 export function candleWarmth(point: Vec3, normal: Vec3) {
-  const { strength, soft, jar } = scene.candle
-  const flame = scene.anchors.candle
-  const v = sub(flame, point)
-  const d2 = dot(v, v)
-  const cos = Math.max(0, dot(normal, v) / Math.sqrt(d2))
-  // the lowest part of the flame this point sees over the rim nearest it
-  const across = Math.hypot(v[0], v[2])
-  const k = Math.min(0.99, jar.radius / across)
-  const lowest = (jar.rim - point[1] * k) / (1 - k)
-  const seen = Math.min(1, Math.max(0, (jar.light[1] - lowest) / (jar.light[1] - jar.light[0])))
-  const light = (strength * cos * seen) / ((d2 + soft * soft) * Math.PI)
+  const { soft, reach, radius, jars } = scene.candle
+  let light = 0
+  for (const jar of jars) {
+    const strength = jar.strength ?? scene.candle.strength
+    const v = sub(jar.flame, point)
+    const d2 = dot(v, v)
+    const dist = Math.sqrt(d2)
+    const cos = Math.max(0, dot(normal, v) / dist)
+    // the lowest part of the flame this point sees over the rim nearest it
+    const across = Math.hypot(v[0], v[2])
+    const k = Math.min(0.99, radius / across)
+    const lowest = (jar.rim - point[1] * k) / (1 - k)
+    const seen = Math.min(1, Math.max(0, (jar.light[1] - lowest) / (jar.light[1] - jar.light[0])))
+    const fade = 1 - smoothstep(0.6 * reach, reach, dist)
+    light += (strength * cos * seen * fade) / ((d2 + soft * soft) * Math.PI)
+  }
   return light / (light + TUBE_LIGHT)
 }
 
