@@ -67,6 +67,9 @@
       uniform mat3 uLetterRot[LETTER_N]; // letter frame → world: twist on the wire, then pendulum tilt
       uniform vec4 uLetterLegs[LETTER_N]; // a bridle for a letter open at the top (the M): x, y of each leg's end; all 0 when the wire ties straight on
       uniform vec3 uLetterMin, uLetterMax; // box around all the letters and their wires
+      uniform sampler2D uRug; // signed distance to the rug's outline, in texels (positive off it); see rugField
+      uniform vec4 uRugBox; // where that texture lies on the floor: x0, z0 (the door end), x1, z1
+      uniform float uRugScale; // metres per texel
       layout(location = 0) out vec4 outBase;
       layout(location = 1) out vec4 outCandle;
       layout(location = 2) out vec4 outCandle2;
@@ -354,6 +357,17 @@
         vec4(0.25, -2.35, -1.25, 0.052)
       );
 
+      // ---- the rug: Miles Morales' spider, in front of the tagline board ----
+      // A rug cut in the shape of his emblem from Across the Spider-Verse (a spray-painted spider in
+      // a ring, its legs reaching out past it), lying on the concrete down the middle of the hall in
+      // front of the tagline board, the spider's head towards the board and the tips of its top legs
+      // stopping short of the work station. Big enough to read from the door, not wall to wall. Its
+      // outline is traced from the emblem (RUG in the JS) and sampled as a distance field. Red wool
+      // pile: matt, where the concrete is glossy.
+      const vec2 RUG_POS = vec2(0.15, 7.6); // the middle of it on the floor (x, z)
+      const float RUG_LEN = 6.0; // from the tips of its top legs to the tips of its bottom ones; it is 4.95 m across
+      const vec3 RUG_RED = vec3(0.50, 0.035, 0.04);
+
       const int M_NONE = 0, M_FLOOR = 1, M_CEIL = 2, M_LEFT = 3, M_RIGHT = 4, M_BACK = 5,
         M_FRONT = 6, M_STUD = 7, M_BEAM = 8, M_TUBE = 9, M_PIPE = 10, M_PLATE = 11,
         M_BOARD = 12, M_FRAME = 13, M_STAND = 14, M_WHEEL = 15, M_CHALK = 16, M_ERASER = 17,
@@ -362,7 +376,7 @@
         M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32, M_SOFA = 33, M_PILLOW = 34, M_DOG = 35, M_NOSE = 36,
         M_LAPTOP = 37, M_SCREEN = 38, M_DBOOK = 39, M_PAPER = 40, M_PENCIL = 41,
         M_EASEL = 42, M_CANVAS = 43, M_PALETTE = 44, M_BRUSH = 45, M_BRISTLE = 46,
-        M_PAINT_TUBE = 47, M_POT = 48, M_RAG = 49;
+        M_PAINT_TUBE = 47, M_POT = 48, M_RAG = 49, M_RUG = 50;
 
       struct Hit { float t; vec3 n; int m; };
 
@@ -1155,6 +1169,13 @@
 
       float blob(vec2 q, vec2 c, float s) { vec2 v = q - c; return exp(-dot(v, v) / s); }
 
+      // How far a point on the floor is from the rug's edge (m): negative on the rug, positive off it
+      float rugEdge(vec2 xz) {
+        vec2 uv = vec2((xz.x - uRugBox.x) / (uRugBox.z - uRugBox.x), (uRugBox.w - xz.y) / (uRugBox.w - uRugBox.y));
+        if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) return 1.0;
+        return textureLod(uRug, uv, 0.0).r * uRugScale;
+      }
+
       // chalk dust trodden into the floor in front of the board (board-frame xz)
       float chalkDust(vec2 q) {
         float dust = blob(q, vec2(-0.30, -0.30), 0.05) + blob(q, vec2(0.20, -0.22), 0.04)
@@ -1221,6 +1242,7 @@
           a *= 1.0 - 0.45 * joint;
           vec3 q = boardLocal(p);
           if (abs(q.x) < 1.6 && q.z > -2.6 && q.z < 0.6) a = mix(a, 0.9, chalkDust(q.xz));
+          a *= mix(0.6, 1.0, smoothstep(0.0, 0.016, rugEdge(p.xz))); // the rug's pile stands a centimetre proud: a thin shadow along its edge
           return a;
         }
         if (m == M_BOARD || m == M_BOARD2) {
@@ -1590,12 +1612,26 @@
         return mix(vec3(cloth) * vec3(1.0, 0.98, 0.94), paint * 0.7, 0.8 * stain);
       }
 
+      // The rug: red pile, mottled tuft by tuft, and darker where its edge rolls over. The chalk dust
+      // in front of the board is trodden into it, and any paint flicked this far would land on it.
+      vec3 rugSurface(vec3 p) {
+        vec2 q = p.xz - RUG_POS; // small numbers, so the noise stays fine-grained
+        vec3 a = RUG_RED * (0.8 + 0.32 * noise(q * 110.0)) * (0.88 + 0.24 * fbm(q * 2.3 + 5.0));
+        a *= mix(0.72, 1.0, smoothstep(0.0, 0.014, -rugEdge(p.xz)));
+        vec3 b = boardLocal(p);
+        if (abs(b.x) < 1.6 && b.z > -2.6 && b.z < 0.6) a = mix(a, vec3(0.8), 0.6 * chalkDust(b.xz));
+        vec2 c = artLocal(p).xz;
+        if (c.x > -1.05 && c.x < 2.0 && c.y > -1.65 && c.y < 2.15) { vec4 s = paintOn(c, 0, SPLAT_FLOOR); a = mix(a, s.rgb, s.w); }
+        return a;
+      }
+
       // A surface's colour. The hall itself is grey — concrete, slate, steel, the fleece sofa, the
       // card letters. What really has a colour gets it: the candles' navy glass and gold printing,
       // their cream wax, the oak the crates and the easel are made of, the primed cotton of the
-      // canvases, and the oil paint — in the tubes, on the palette, on the brushes, and flicked
-      // over the floor round the easel and onto the sofa.
+      // canvases, the oil paint — in the tubes, on the palette, on the brushes, and flicked over the
+      // floor round the easel and onto the sofa — and the red rug.
       vec3 surface(int m, vec3 p, vec3 n) {
+        if (m == M_RUG) return rugSurface(p);
         if (m == M_WAX) return vec3(0.87, 0.84, 0.77);
         if (m == M_CANVAS) return canvasSurface(p);
         if (m == M_PALETTE) return paletteSurface(p);
@@ -1835,6 +1871,7 @@
           if (bounce == 0) { flame0 += flameGlow(o, d, h.t, 0); flame1 += flameGlow(o, d, h.t, 1); }
           if (h.m == M_NONE) break;
           vec3 p = o + d * h.t;
+          if (h.m == M_FLOOR && p.y < 0.01 && rugEdge(p.xz) < 0.0) h.m = M_RUG; // the rug is part of the floor, but matt and red
 
           float e = emission(h.m, p);
           if (h.m == M_TUBE) { if (countEmitters) radiance += throughput * e; break; }
@@ -2358,6 +2395,48 @@
         }
       }
 
+      // The rug's outline: Miles Morales' spider emblem from Across the Spider-Verse, traced from a
+      // picture of it (the edge of the red paint by marching squares, the loose specks of spray
+      // dropped, simplified to within 1.2 px), in pixels of a w × h box with the tips of the top legs
+      // along its top edge. The holes are separate outlines, so it fills evenodd.
+      const RUG = {
+        w: 526,
+        h: 638,
+        d: 'M227.8 0L229.2 0L229.2 3L221.8 22L217 43L212 55.9L212 63.6L235 61.2L246 57.6L261 57.5L262 55.9L270 55.5L293 55.6L315 59.2L315.5 54L300 9L299.6 6L301 5.6L311.3 18L319.9 35L323.3 38L329.9 53L340 67.3L367 76L367.2 68L360 51L359.6 46L361 45.6L371 60.5L373.9 69L383 81L417 101.9L418 105L423 106L438 119.5L443 121.8L445.9 127L479.3 162L481.7 169L485 171.3L493 185.5L493.2 193L491.2 197L493.1 198L493.8 205L496 207.6L503.1 208L503.8 213L507.1 218L508.1 227L511 230L513.8 241L517.2 246L517.7 261L519.2 262L519.9 277L521.3 278L525.4 327L521.9 342L521.8 357L520 358L517.8 366L517.3 376L519.3 383L514 387.4L511.3 394L511 401L505.8 406L503.3 425L500 423.2L498 425.4L493.4 439L486 447.2L485.3 453L475.8 462L473 469.5L469.8 470L462 487L455 493.3L438 501.4L437.1 505L431 511.8L427.7 512L423 517.4L408 524L402 529.7L385 569.8L371 593.3L368 593.8L368 592L373.2 581L379.7 556L383.2 549L385.3 534L380 535.1L377.5 539L375.8 538L375 541.1L369.8 540L367 545L364 543.9L363 540.8L357.9 540L357.5 547L349.9 550L341.3 577L334 590L323.1 617L317.6 625L312 625.1L307 635.1L305.5 630L313.1 615L313.8 608L317.4 603L325.5 581L329.5 565L329 557.9L310 561.4L309 563.5L278 565L262 569L244 567.5L241.9 568L241 571.1L238.2 571L235 567.7L220 567.3L205 564.4L203.9 569L213.4 606L213.6 613L215.4 614L221.9 637L216 632.7L205.9 615L199.9 603L187.6 566L179.3 556L172 555.1L167 551.7L160 551.2L155 545.7L149 543.1L147.3 544L156 583L159.4 588L159.8 593L158 593.3L149.4 576L142 569L141.3 562L127.1 530L117 521.8L113.3 521L109 515.3L96 507.1L91.6 502L87.7 501L87.2 498L75.8 486L68 481.5L61.2 470L55.9 465L53 457.6L47.6 453L41.4 438L37.8 435L37 430L34 429L33.3 422L30 419.7L22.9 391L15.8 383L11.5 373L7.8 342L2 335L-0.3 329L1.9 321L1.5 306L3.1 303L1.8 292L5.3 287L8 256L10 250L11 251L12 243.9L17.4 235L22 214L24.2 213L28 203L31.2 201L32 198L35.1 197L51.5 170L65 157.9L66 153.6L69.6 151L70 147.2L75 143.8L85.2 130L91 127L91.9 124L95 123.3L95.9 120L99.5 119L102 115.4L119.7 105L123.6 98L132 89.8L137.1 89L143 81L151.8 62L166 41.9L167.2 45L159.7 66L160 76L178 69.6L185.6 69L191 66L199.1 53L202 42L211.8 22L221.7 6ZM209 82.7L205.3 84L201.9 90L197.1 111L179.7 160L174.2 181L175.3 197L187.1 213L230 253.7L233.1 251L233.8 232L235.9 224L252 203.5L253.5 204L253.5 207L249.9 214L249.2 229L251.8 245L258 251.2L262 251.8L271 251.2L277 245.5L279.7 224L279.3 214L275.7 207L276.2 202L291.3 220L295.1 230L297.9 255L305 253.3L310 246.2L313.6 245L343 213L349.1 203L347.8 198L351.7 187L349.2 170L346.1 165L329 95.4L325 90L285 85.8L258 85.4L253 83.7L234 83L215 84.8ZM174 93.9L167.5 96L165 99.2L154 101.6L149.6 106L145.7 118L128.2 206L131.1 215L130 225.3L137.4 233L156 245.4L157.6 245L158 241L157 231.1L134 216L135.5 215L136 205.2L145 187L147.9 176L153 169.1L155.8 158L179.1 101L179 95.6ZM356 95.7L353.4 98L353.6 105L375.9 169L385.1 188L389.3 204L389.4 213L359.7 245L353.5 248L341 261.3L337.9 262L335.1 267L328 273.1L328 275.4L351 265.2L377.3 249L379.2 246L383 245.3L403.1 223L401 199.7L381.1 114L377 105.8L365 98.2ZM120 116L115.4 123L111 127.5L107.7 128L105.7 133L102 134L99 139.8L87.8 150L79.2 165L70 173.7L69 179.8L65.7 182L57.1 201L54 203L47.9 214L39.5 241L33.6 252L33.4 261L31.6 262L33 277L30.4 293L33 311L31.6 318L33 323L31.3 327L35.2 340L33.8 347L37.7 377L40 387.8L49 407.5L53.6 423L73.9 453L83 462L86 469L89 469.8L95 475.9L96 479.6L103 487L103.8 491L117 503L117.2 490L111.8 473L105.4 438L103.7 437L101.1 422L98 419.7L96 414.6L95.2 406L87.7 393L87.4 386L82 377.4L81.8 374L77.6 373L75.7 367L77.1 366L75.2 365L75.5 346L80 339.6L84 337.8L117 331.5L118 329.9L153 325.2L160.2 322L197 315.1L197.1 313L191 305.9L173.3 294L166 291.2L139 273.9L134 273.1L131 269.9L126 269.1L121 265.7L118 265.4L116 267.4L115.2 279L113.8 280L113.6 287L112 287.6L109.8 285L111 274L109.4 266L105 261.4L94 257.6L87.8 247L89.2 244L87.7 243L87.6 234L91.6 217L89.5 210L95.5 209L99.4 205L99.2 200L103.6 197L108 178L115.1 159L116 150L125.1 127L125.8 118ZM402 117.3L402 123L403.9 129L407 132L409.9 145L413.1 150L416 163.9L421 174.8L421.6 181L423.4 182L425.7 197L431.3 210L439 249.3L437.6 253L431.1 259L424 262L416.4 269L394 277.7L391.4 281L377.7 288L375 291L350 303.9L338 312.5L337.2 315L338 317.4L347 318L366 323.1L389 323.8L390 325.4L402 327L415 325.9L416 327.8L420 328.4L431 327.8L432 329.7L437 330L438 333.1L443.9 334L447 338L447.1 351L441.1 389L439.6 390L437.3 405L435.6 406L433.4 421L431.7 422L429.4 437L427.6 438L425.4 453L423.7 454L423.1 461L417.9 476L415.6 486L416 494.5L418.2 492L423.1 491L425.7 484L431 479L432 475.7L453.6 453L459 445L460 439.5L463.3 437L465.9 428L469.4 425L470 419.9L477 411.1L477.6 404L475.9 402L480 400L479.1 396L482 384L485.1 379L485.8 370L489.4 365L493.3 349L493.7 338L491.9 336L495.4 335L497 292L495.1 276L487.6 255L481.6 214L473.3 194L460 179.2L457 170L453.9 169L445 153.5L438 148.5L437.1 144L422 135.7L421 132L418 131L413 122ZM165 238.4L163.4 243L168 251.6L182 261.4L185.8 262L187.8 265L191.1 265L192 262L169 239.8ZM202 341.9L150 351.8L149 353.4L118 361.9L115.3 366L121.8 427L138 513L140 517.6L145.2 522L147.1 526L146 527L159 529.9L162 533.2L176 539.2L179 537.8L179.2 534L173.7 519L163.1 470L157.9 457L153.3 432L149.9 425L149.1 416L144 405.6L142 384L148 377.8L155 375.3L160 369.9L201 347.3L204.6 344ZM326 347.5L325.4 351L330 355.1L353 367.9L379.5 386L389.2 400L379.1 445L357.8 520L355.9 533L359 535.5L360 531.8L366 527.9L377.2 527L378 523.4L383.6 521L389 515.1L393 505.7L403.1 461L405.5 438L407.1 437L408 423.7L411 413L413 387.5L409.6 374L405 367.8L396 367.3L349.6 352ZM222 369.5L214 373.8L197 389.6L194 390L179.5 406L186 485L191 503.1L191.6 517L193.4 518L195.5 533L197.2 534L199.9 547L234 553L279 551.5L309 547.3L316 543.9L333.2 541L339.2 529L343.7 502L345.5 501L347.8 478L351 469L353 411.4L309 373.7L303 371.8L301.5 372L295.2 399L291 405.4L287.7 405L285 386L283 383.8L278 386L277.1 389L274 389.8L269.6 395L264 395.5L260 393.4L259 390L250 380.3L247.7 382L245.3 399L242 404L241.5 437L238 437.6L235.7 433L235.5 398L233 382L229 371.4Z',
+      }
+
+      // The rug laid out on the floor, as a signed distance to its edge (texels, positive off it): the
+      // outline drawn at SCALE texels per outline pixel with a border of bare floor round it, then an
+      // exact distance transform of the outside and the inside, as for the letters. It is centred on
+      // [x, z] and sized so its legs' tips are length apart, the top of the emblem towards +z.
+      function rugField([x, z], length) {
+        const SCALE = 2, BORDER = 16
+        const width = RUG.w * SCALE + 2 * BORDER, height = RUG.h * SCALE + 2 * BORDER
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        ctx.fillStyle = '#000'
+        ctx.fillRect(0, 0, width, height)
+        ctx.setTransform(SCALE, 0, 0, SCALE, BORDER, BORDER)
+        ctx.fillStyle = '#fff'
+        ctx.fill(new Path2D(RUG.d), 'evenodd')
+        const mask = ctx.getImageData(0, 0, width, height).data
+        const outer = new Float64Array(width * height), inner = new Float64Array(width * height)
+        for (let i = 0; i < width * height; i++) {
+          const a = mask[i * 4] / 255
+          outer[i] = a === 1 ? 0 : a === 0 ? EDT_INF : Math.max(0, 0.5 - a) ** 2
+          inner[i] = a === 1 ? EDT_INF : a === 0 ? 0 : Math.max(0, a - 0.5) ** 2
+        }
+        edt(outer, width, height)
+        edt(inner, width, height)
+        const sdf = new Float32Array(width * height)
+        for (let i = 0; i < width * height; i++) sdf[i] = Math.sqrt(outer[i]) - Math.sqrt(inner[i])
+        const scale = length / (RUG.h * SCALE) // metres per texel
+        const halfW = (width / 2) * scale, halfH = (height / 2) * scale
+        return { sdf, width, height, scale, box: [x - halfW, z - halfH, x + halfW, z + halfH] }
+      }
+
       // Reads a glyph's ink back out of the atlas to decide where its wire ties on. Hung from
       // the column through its centre of mass a letter hangs level, and the wire meets the
       // first ink down that column — the top of an o, the shoulder of an h (the i's dot is a
@@ -2694,6 +2773,18 @@
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
         gl.uniform1i(uniform('uLetters'), 2)
         gl.uniform1f(uniform('uLetterScale'), letters.scale)
+
+        const rug = rugField(vec('RUG_POS'), num('RUG_LEN'))
+        gl.activeTexture(gl.TEXTURE9)
+        gl.bindTexture(gl.TEXTURE_2D, gl.createTexture())
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, rug.width, rug.height, 0, gl.RED, gl.FLOAT, rug.sdf)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, sdfFilter)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, sdfFilter)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+        gl.uniform1i(uniform('uRug'), 9)
+        gl.uniform4fv(uniform('uRugBox'), rug.box)
+        gl.uniform1f(uniform('uRugScale'), rug.scale)
         gl.activeTexture(gl.TEXTURE0)
 
         gl.viewport(0, 0, W, H)
@@ -2941,10 +3032,13 @@
         }
 
         // the exposure that puts the median pixel in the mid-tones, whatever the light levels
-        // (judged on the tubes' light alone, so the candle's strength never moves it)
+        // (judged on the tubes' light alone, so the candle's strength never moves it). Each pixel
+        // counts by its brightest channel, which for the grey hall is just its brightness: judged by
+        // luminance the red rug, with hardly any green in it, read as dark floor, and the frames it
+        // fills were turned up until the whole hall washed out.
         const autoExposure = ([base]) => {
           const lum = new Float32Array(Math.ceil((W * H) / 7))
-          for (let i = 0, j = 0; i < W * H; i += 7, j++) lum[j] = 0.2126 * base[i * 4] + 0.7152 * base[i * 4 + 1] + 0.0722 * base[i * 4 + 2]
+          for (let i = 0, j = 0; i < W * H; i += 7, j++) lum[j] = Math.max(base[i * 4], base[i * 4 + 1], base[i * 4 + 2])
           const median = lum.sort()[Math.floor(lum.length * 0.5)] / SPP
           return median > 0 ? 0.34 / median : 1
         }

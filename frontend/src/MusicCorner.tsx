@@ -47,10 +47,13 @@ function MusicCorner({ lens, closeUp, focused, overview, onEnter }: Props) {
   const inset = columns === 5 ? 40 : 20 // two rows only just fit the height
   const columnWidth = Math.min(340, (area.width - 2 * inset - (columns - 1) * SHEET_GAP) / columns)
   const shown = artists ?? latest ?? []
+  // The board isn't drawn while it's behind the camera (at the laptop), see below
+  const boardInView = project(lens, quadPoint(anchors.musicBoard, 0.5, 0.5)).z > 0
 
   // Candlelight on what's on the board: each thing marked data-lit gets --warm, how much of the
   // light on it is the candle's, from where its middle is on the slate (1 px = 1 mm). The
-  // layout moves only when the list or the space for it does.
+  // layout moves only when the list or the space for it does, but the board comes back as new
+  // elements each time it's in view again, which need it set afresh or they're grey.
   useLayoutEffect(() => {
     const board = boardRef.current
     if (!board) return
@@ -63,7 +66,7 @@ function MusicCorner({ lens, closeUp, focused, overview, onEnter }: Props) {
       }
       element.style.setProperty('--warm', candleWarmth(quadPoint(anchors.musicBoard, x / BOARD_W, y / BOARD_H), normal).toFixed(3))
     }
-  }, [anchors.musicBoard, artists, latest, columns, area.left, area.top, area.width, area.height])
+  }, [anchors.musicBoard, artists, latest, columns, area.left, area.top, area.width, area.height, boardInView])
 
   // Notes and hologram are sized from how big a centimetre is at the record, but never so
   // small that they can't be seen or read from across the hall.
@@ -74,12 +77,11 @@ function MusicCorner({ lens, closeUp, focused, overview, onEnter }: Props) {
   // back is to it, and a point behind the lens projects to a mirrored place on screen — which used
   // to leave the hologram, its beam and the notes stuck to the edge of those shots, labelling a
   // record player nobody could see.
-  const boardMiddle = project(lens, quadPoint(anchors.musicBoard, 0.5, 0.5))
   const behind = record.z <= 0
 
   return (
     <div className="studio-overlay">
-      {boardMiddle.z > 0 && (
+      {boardInView && (
       <div ref={boardRef} className="board-plane" style={{ transform: planeTransform(lens, anchors.musicBoard, BOARD_W, BOARD_H) }} inert={!focused}>
         <div
           className={`board-area${columns === 5 ? "" : " is-compact"}`}

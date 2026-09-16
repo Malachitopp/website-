@@ -28,5 +28,11 @@ tools/studio-render/preview-*.json
 .DS_Store
 Thumbs.db
 
+# my Obsidian notes about the site
+/Website Vault/
+
+# graphify's knowledge graph of the repo (generated)
+graphify-out/
+
 # vercel link (.env.local, which it also writes, is already covered by .env.* above)
 .vercel
