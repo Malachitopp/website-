@@ -23,11 +23,13 @@ function requireSecret(req: Request, res: Response, next: NextFunction) {
 
 artRouter.get('/', async (req: Request, res: Response) => {
     const { rows } = await pool.query(
-        `SELECT id, public_id, url, title, year, medium, width, height, metadata, created_at
+        `SELECT id, public_id AS "publicId", url, title, year, medium,
+                width, height, metadata, created_at AS "createdAt"
          FROM art
          ORDER BY created_at DESC`
     );
-    return res.json(rows);
+    // camelCase, and wrapped in { art } -- the shape frontend/src/studio/art.ts expects
+    return res.json({ art: rows });
 });
 
 artRouter.get('/signature', requireSecret, (req: Request, res: Response) => {
@@ -35,11 +37,11 @@ artRouter.get('/signature', requireSecret, (req: Request, res: Response) => {
 });
 
 artRouter.post('/', requireSecret, async (req: Request, res: Response) => {
-    const { public_id, secure_url,
+    const { publicId, url,
         width, height, title, year, medium, metadata } = req.body ?? {};
 
-    if (typeof public_id !== 'string' || typeof secure_url !== 'string') {
-        return res.status(400).send('public_id and secure_url are required');
+    if (typeof publicId !== 'string' || typeof url !== 'string') {
+        return res.status(400).send('publicId and url are required');
     }
     if (!Number.isInteger(width) || !Number.isInteger(height)) {
         return res.status(400).send('width and height must be integers');
@@ -60,8 +62,9 @@ artRouter.post('/', requireSecret, async (req: Request, res: Response) => {
             year = EXCLUDED.year,
             medium = EXCLUDED.medium,
             metadata = EXCLUDED.metadata
-         RETURNING id, public_id, url, title, year, medium, width, height, metadata, created_at`,
-        [public_id, secure_url, width, height,
+         RETURNING id, public_id AS "publicId", url, title, year, medium,
+                   width, height, metadata, created_at AS "createdAt"`,
+        [publicId, url, width, height,
             title ?? null, year ?? null, medium ?? null, metadata ?? {}]
     );
 
