@@ -213,6 +213,128 @@
       const vec3 DBOOK_LEAN = vec3(0.045, 0.308, 0.0); // a book leaning over from the middle row to the crate's side
       const float LEAN_C = 0.88295, LEAN_S = 0.46947; // 28°
 
+      // ---- the art corner, on the left of the sofa: where I paint ----
+      // A wooden studio easel with a blank canvas on it, turned a little towards the middle of the
+      // hall so its face is towards the door (the site lays my paintings onto that canvas); spare
+      // canvases leaning about behind it and one lying face up on the floor in front of the sofa;
+      // a crate like the other three at the painter's side, with a tin of brushes, tubes of oil
+      // paint and a rag on top and a palette leaning against it; and oil paint flicked over the
+      // concrete all round it, and onto the sofa, as happens. Everything is in the corner's frame:
+      // origin in the middle of the easel's footprint, the canvas facing -z. The paint, the wood
+      // and the palette are the one part of the hall with colour in it besides the candles — see
+      // surface().
+      // The easel itself stands in the open floor at the sofa's front-left corner, about 35 cm clear
+      // of its left side and a little ahead of its front — in the foreground, not tucked away
+      // behind (the user, 2026-09-16: "i want the actual easel to be like 25-50cm to the left and
+      // infront of the sofa, but the mess can extend behind the sofa … dont have the easel pushed in
+      // the backgroudn"). The mess does the opposite: the spare canvases and the paint run from in
+      // front of the easel back past the sofa, one canvas ending up behind it with only its top
+      // showing over the back.
+      // Where it stands is pinned between two limits: the gap to the sofa wants it further left,
+      // and a phone's `cover` crop of the portrait overview wants it further right and deeper (the
+      // canvas's left corner has to stay inside 0.88 of the render's half-width, which at this depth
+      // is 3.97 m). This is both, with about 30 cm of floor between it and the sofa's left side.
+      const vec3 ART_POS = vec3(-3.62, 0.0, 10.78);
+      const float ART_C = 0.98481, ART_S = -0.17365; // -10°
+      // The easel is a lyre easel: its mast — two uprights, two braces, the ledge the canvas
+      // stands on and the clamp over the canvas's top edge — leans back as one piece, so all of
+      // that is axis-aligned in the mast's own frame (easelLocal, pivoting on the floor). The two
+      // front feet and the rear leg don't lean with it: they stand in the corner's frame.
+      const float EASEL_LEAN_C = 0.99452, EASEL_LEAN_S = 0.10453; // 6°
+      const float EASEL_X = 0.145; // half the gap between the uprights
+      const float EASEL_W = 0.026, EASEL_T = 0.021; // half the width and half the thickness of a batten
+      const float EASEL_H = 1.78; // how tall the uprights stand
+      const float LEDGE_Y = 0.745; // the top of the ledge: where the canvas stands
+      const float EASEL_FOOT = 0.19, EASEL_REAR = 0.58; // how far a front foot reaches forward, and the rear leg's foot back
+
+      // The canvases: a stretcher CANVAS_T deep with primed cotton over it, standing on the middle
+      // of its bottom edge at CANVAS_POS (x, y, z in the corner's frame) turned by that yaw, and
+      // leaning back from upright by CANVAS_FORM.x, CANVAS_FORM.yz wide and tall. In a canvas's own
+      // frame x runs across it, y up it from the bottom edge and z into it from the face, so a lean
+      // of a right angle lays it face up on the floor — which is the last one, in front of the sofa.
+      // Index 0 is the one on the easel; its place comes from the mast, not from a guess.
+      const int CANVAS_N = 8;
+      const float CANVAS_T = 0.018;
+      const vec4 CANVAS_POS[CANVAS_N] = vec4[CANVAS_N](
+        vec4(0.0, 0.745, 0.0391, 0.0), // on the easel, leaning with the mast
+        // three stacked in a loose rack just behind it, each resting on the one in front, stepping
+        // back along their own normal; the third is turned round, so that one shows its stretcher
+        vec4(0.10, 0.0053, 0.55, 0.35),
+        vec4(0.129, 0.0053, 0.63, 0.35),
+        vec4(0.158, 0.0, 0.71, 3.4916),
+        vec4(-0.30, 0.0045, 0.85, -0.52), // a small one out to the left, leaning the other way
+        vec4(0.30, 0.0, 1.30, 3.30), // one further back level with the sofa, its stretcher out
+        vec4(1.00, 0.0046, 1.70, 0.55), // and one behind the sofa, only its top showing over the back
+        vec4(1.05, 0.018, -0.48, 1.466)); // one lying face up on the floor in front of the sofa
+      const vec3 CANVAS_FORM[CANVAS_N] = vec3[CANVAS_N](
+        vec3(0.10472, 0.70, 0.90), vec3(0.30, 0.50, 0.70), vec3(0.30, 0.60, 0.80),
+        vec3(-0.30, 0.55, 0.75), vec3(0.25, 0.40, 0.50), vec3(-0.28, 0.55, 0.75),
+        vec3(0.26, 0.60, 0.95), vec3(1.5708, 0.55, 0.75));
+      // Paint that has ended up on the spare canvases: x across the face from its middle, y up it
+      // (m), how wide the mark is, and which colour. Each canvas but the easel's takes a window of
+      // four of these, so no two are splattered alike.
+      const int CSPLAT_N = 12;
+      const vec4 CSPLAT[CSPLAT_N] = vec4[CSPLAT_N](
+        vec4(-0.12, 0.22, 0.045, 0.0), vec4(0.09, 0.48, 0.028, 1.0), vec4(-0.05, 0.62, 0.018, 3.0),
+        vec4(0.16, 0.14, 0.036, 2.0), vec4(-0.20, 0.40, 0.022, 4.0), vec4(0.02, 0.30, 0.052, 5.0),
+        vec4(0.21, 0.58, 0.020, 0.0), vec4(-0.16, 0.08, 0.030, 1.0), vec4(0.06, 0.70, 0.026, 2.0),
+        vec4(-0.24, 0.55, 0.016, 3.0), vec4(0.13, 0.36, 0.040, 4.0), vec4(-0.02, 0.12, 0.024, 5.0));
+
+      // The crate at the painter's side, in front of the easel and to its left, sharing the
+      // corner's yaw: a plywood crate like the candle's, open to the front, with a shelf.
+      const vec3 ART_BOX = vec3(0.44, 0.0, -0.54); // the middle of its footprint (corner frame): ahead of the easel, on the sofa's side, where a painter's hand goes
+      const float ART_BOX_HW = 0.21, ART_BOX_HD = 0.175, ART_BOX_H = 0.62, ART_BOX_SHELF = 0.29;
+      const vec2 POT_C = vec2(0.055, -0.03); // the tin of brushes on top (x, z in the crate's frame)
+      const float POT_R = 0.052, POT_H = 0.135;
+      const int BRUSH_N = 9;
+      // tubes of oil paint lying about: x, z in the crate's frame, yaw, and which of PAINT is on the label
+      const int PAINT_TUBE_N = 6;
+      const vec4 PAINT_TUBE[PAINT_TUBE_N] = vec4[PAINT_TUBE_N](
+        vec4(-0.085, 0.055, 0.42, 0.0), vec4(-0.055, -0.015, -0.31, 1.0), vec4(-0.12, -0.075, 1.05, 3.0),
+        vec4(-0.03, -0.105, 0.18, 4.0), vec4(-0.1, 0.02, 0.85, 2.0), vec4(0.075, -0.13, -0.62, 5.0));
+      const float PAINT_TUBE_R = 0.0135, PAINT_TUBE_L = 0.043; // radius, half the length of the body
+      // the palette, standing on the floor and leaning against the crate's front, its blobs facing the door
+      const vec3 PALETTE_AT = vec3(0.40, 0.008, -0.792); // middle of its bottom edge (corner frame): its top leans on the crate's front
+      const float PALETTE_YAW = -0.22, PALETTE_LEAN = 0.26;
+      const float PALETTE_HW = 0.19, PALETTE_H = 0.30, PALETTE_T = 0.009;
+
+      // Oil paint on the floor round the easel (x, z in the corner's frame) and on the sofa (in the
+      // sofa's): where each dab is, how wide it is, and which of PAINT it is. Colour only — no
+      // geometry, it is painted into the surface.
+      // The big trodden-in smears come first and the flicked droplets last, since a later dab
+      // lands on top of an earlier one. Everything is clustered where you stand to paint, round
+      // the crate, and in a trail over to the canvas on the floor by the sofa.
+      const int SPLAT_N = 48, SPLAT_FLOOR = 38; // the first SPLAT_FLOOR are the floor's, the rest the sofa's
+      const vec4 SPLAT[SPLAT_N] = vec4[SPLAT_N](
+        vec4(0.05, -0.75, 0.17, 2.0), vec4(-0.35, -0.50, 0.13, 0.0), vec4(0.45, -0.95, 0.15, 1.0),
+        vec4(-0.15, -1.15, 0.12, 4.0), vec4(0.62, -0.55, 0.11, 5.0), vec4(-0.55, -0.90, 0.14, 3.0),
+        vec4(0.25, 0.55, 0.12, 2.0), vec4(-0.45, 0.35, 0.10, 0.0),
+        vec4(-0.18, -0.32, 0.058, 0.0), vec4(0.30, -0.42, 0.046, 1.0), vec4(-0.62, -0.35, 0.052, 3.0),
+        vec4(0.15, -0.20, 0.038, 4.0), vec4(0.52, -0.28, 0.044, 2.0), vec4(-0.30, -1.35, 0.034, 5.0),
+        vec4(0.08, -0.55, 0.048, 1.0), vec4(0.72, -0.78, 0.030, 0.0), vec4(-0.72, -0.62, 0.036, 4.0),
+        vec4(0.38, -1.25, 0.042, 2.0), vec4(-0.05, 0.28, 0.032, 0.0), vec4(0.48, 0.42, 0.026, 1.0),
+        vec4(-0.28, 0.72, 0.038, 3.0), vec4(0.18, 0.95, 0.028, 5.0), vec4(-0.60, 0.15, 0.034, 2.0),
+        vec4(0.05, 1.25, 0.024, 0.0), vec4(0.35, 1.60, 0.030, 4.0), vec4(-0.20, 1.45, 0.022, 1.0),
+        vec4(0.85, -0.40, 0.026, 3.0), vec4(1.15, -0.62, 0.032, 0.0), vec4(1.45, -0.52, 0.024, 2.0),
+        vec4(0.95, -0.85, 0.020, 5.0), vec4(1.70, -0.70, 0.028, 1.0), vec4(0.78, 1.15, 0.022, 4.0),
+        vec4(1.05, 1.55, 0.026, 0.0), vec4(1.35, 1.85, 0.020, 3.0),
+        vec4(0.22, -0.62, 0.013, 0.0), vec4(-0.10, -0.45, 0.011, 1.0), vec4(0.40, -0.70, 0.015, 3.0),
+        vec4(-0.48, -0.75, 0.012, 4.0),
+        vec4(-0.48, -0.26, 0.030, 0.0), vec4(-0.24, -0.34, 0.018, 3.0), vec4(-0.64, -0.08, 0.024, 1.0),
+        vec4(-0.06, 0.04, 0.014, 4.0), vec4(-0.72, 0.16, 0.020, 2.0), vec4(0.16, -0.40, 0.012, 0.0),
+        vec4(-0.36, 0.22, 0.016, 5.0), vec4(0.30, -0.14, 0.010, 1.0), vec4(-0.56, -0.42, 0.013, 2.0),
+        vec4(-0.80, -0.30, 0.017, 3.0));
+      // the colours I paint in, as reflectances: what is squeezed out of the tubes and flicked round
+      const int PAINT_N = 6;
+      const vec3 PAINT[PAINT_N] = vec3[PAINT_N](
+        vec3(0.72, 0.11, 0.07), // cadmium red
+        vec3(0.07, 0.15, 0.55), // ultramarine
+        vec3(0.80, 0.52, 0.10), // yellow ochre
+        vec3(0.92, 0.79, 0.20), // cadmium yellow
+        vec3(0.09, 0.33, 0.19), // viridian
+        vec3(0.88, 0.86, 0.82)); // titanium white
+      const vec3 OAK = vec3(1.0, 0.74, 0.46); // the crates and the easel are oak, not grey
+
       // broken chalk on the floor around it: x, z, yaw (rad), length — in the board frame
       const int CHALK_N = 27;
       const vec4 CHALK[CHALK_N] = vec4[CHALK_N](
@@ -238,7 +360,9 @@
         M_LETTER = 18, M_WIRE = 19, M_BOARD2 = 20, M_WOOD = 21, M_SLEEVE = 22, M_PLINTH = 23,
         M_PLATTER = 24, M_RECORD = 25, M_METAL = 26, M_RUBBER = 27, M_GLASS = 28, M_WAX = 29,
         M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32, M_SOFA = 33, M_PILLOW = 34, M_DOG = 35, M_NOSE = 36,
-        M_LAPTOP = 37, M_SCREEN = 38, M_DBOOK = 39, M_PAPER = 40, M_PENCIL = 41;
+        M_LAPTOP = 37, M_SCREEN = 38, M_DBOOK = 39, M_PAPER = 40, M_PENCIL = 41,
+        M_EASEL = 42, M_CANVAS = 43, M_PALETTE = 44, M_BRUSH = 45, M_BRISTLE = 46,
+        M_PAINT_TUBE = 47, M_POT = 48, M_RAG = 49;
 
       struct Hit { float t; vec3 n; int m; };
 
@@ -252,6 +376,21 @@
       vec3 crateLocal(vec3 p) { return yawLocal(p, CANDLE_TABLE_POS, BOARD2_C, BOARD2_S); }
       vec3 sofaLocal(vec3 p) { return yawLocal(p, SOFA_POS, SOFA_C, SOFA_S); }
       vec3 deskLocal(vec3 p) { return yawLocal(p, DESK_POS, DESK_C, DESK_S); }
+      vec3 artLocal(vec3 p) { return yawLocal(p, ART_POS, ART_C, ART_S); }
+      // the easel's mast, leaning back from the corner's frame about x on the floor
+      vec3 easelLocal(vec3 q) { return vec3(q.x, EASEL_LEAN_C * q.y + EASEL_LEAN_S * q.z, EASEL_LEAN_C * q.z - EASEL_LEAN_S * q.y); }
+      // Into the frame of something standing at base in the corner's frame, turned by a yaw about
+      // y and then tipped back by a lean about x: a canvas (x across it, y up it from its bottom
+      // edge, z into it from its face — so a lean of a right angle lays it face up) or the palette.
+      vec3 tiltedLocal(vec3 q, vec3 base, float yaw, float lean) {
+        q -= base;
+        float c = cos(yaw), s = sin(yaw);
+        q = vec3(c * q.x - s * q.z, q.y, s * q.x + c * q.z);
+        float lc = cos(lean), ls = sin(lean);
+        return vec3(q.x, lc * q.y + ls * q.z, lc * q.z - ls * q.y);
+      }
+      vec3 canvasLocal(vec3 q, int i) { return tiltedLocal(q, CANVAS_POS[i].xyz, CANVAS_POS[i].w, CANVAS_FORM[i].x); }
+      vec3 paletteLocal(vec3 q) { return tiltedLocal(q, PALETTE_AT, PALETTE_YAW, PALETTE_LEAN); }
       // The two candles' jars, each in a frame of its own with the origin under the middle of its
       // base and the yaw of the crate it stands on: 0 is the one by the music board, 1 the one on
       // the work station.
@@ -769,6 +908,123 @@
         if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, DESK_C, DESK_S); h.m = l.m; }
       }
 
+      // ---- the art corner ----
+      // A box turned by a yaw about y and then tipped back by a lean about x, standing at base:
+      // a canvas (leaning against something, or laid flat by a lean of a right angle), the
+      // palette, the easel's rear leg.
+      void tiltedBox(vec3 o, vec3 d, vec3 base, float yaw, float lean, vec3 lo, vec3 hi, int m, inout Hit h) {
+        float c = cos(yaw), s = sin(yaw), lc = cos(lean), ls = sin(lean);
+        vec3 ro = o - base, rd = d;
+        ro = vec3(c * ro.x - s * ro.z, ro.y, s * ro.x + c * ro.z);
+        rd = vec3(c * rd.x - s * rd.z, rd.y, s * rd.x + c * rd.z);
+        ro = vec3(ro.x, lc * ro.y + ls * ro.z, lc * ro.z - ls * ro.y);
+        rd = vec3(rd.x, lc * rd.y + ls * rd.z, lc * rd.z - ls * rd.y);
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        box(ro, rd, lo, hi, m, l);
+        if (l.t >= h.t) return;
+        vec3 n = vec3(l.n.x, lc * l.n.y - ls * l.n.z, ls * l.n.y + lc * l.n.z); // out of the lean...
+        h.t = l.t; h.n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z); // ...and out of the yaw
+        h.m = l.m;
+      }
+
+      void canvasBox(vec3 o, vec3 d, int i, inout Hit l) {
+        vec3 f = CANVAS_FORM[i];
+        tiltedBox(o, d, CANVAS_POS[i].xyz, CANVAS_POS[i].w, f.x,
+          vec3(-0.5 * f.y, 0.0, 0.0), vec3(0.5 * f.y, f.z, CANVAS_T), M_CANVAS, l);
+      }
+
+      // The easel (corner frame): everything in the mast is axis-aligned in its leaning frame, so
+      // the uprights, the braces, the canvas ledge with its lip and the clamp over the canvas's
+      // top edge are plain boxes there; the two front feet lie flat on the floor and the rear leg
+      // props the mast up from behind, so those stand in the corner's frame.
+      void easel(vec3 o, vec3 d, inout Hit l) {
+        vec3 mo = easelLocal(o), md = easelLocal(d);
+        Hit e; e.t = l.t; e.m = M_NONE; e.n = vec3(0);
+        for (int i = -1; i <= 1; i += 2) {
+          float x = float(i) * EASEL_X;
+          box(mo, md, vec3(x - EASEL_W, 0.0, -EASEL_T), vec3(x + EASEL_W, EASEL_H, EASEL_T), M_EASEL, e);
+        }
+        box(mo, md, vec3(-EASEL_X, 0.400, -0.017), vec3(EASEL_X, 0.436, 0.017), M_EASEL, e); // two braces between them
+        box(mo, md, vec3(-EASEL_X, 1.290, -0.017), vec3(EASEL_X, 1.326, 0.017), M_EASEL, e);
+        box(mo, md, vec3(-0.24, LEDGE_Y - 0.03, -0.076), vec3(0.24, LEDGE_Y, EASEL_T), M_EASEL, e); // the ledge the canvas stands on
+        box(mo, md, vec3(-0.24, LEDGE_Y, -0.076), vec3(0.24, LEDGE_Y + 0.037, -0.063), M_EASEL, e); // and the lip along its front
+        box(mo, md, vec3(-0.175, 1.651, -0.052), vec3(0.175, 1.687, EASEL_T), M_EASEL, e); // the clamp bar over the canvas's top edge...
+        box(mo, md, vec3(-0.175, 1.616, -0.052), vec3(0.175, 1.651, -0.040), M_EASEL, e); // ...and the pad it presses the face with
+        if (e.t < l.t) {
+          l.t = e.t; l.m = e.m;
+          l.n = vec3(e.n.x, EASEL_LEAN_C * e.n.y - EASEL_LEAN_S * e.n.z, EASEL_LEAN_S * e.n.y + EASEL_LEAN_C * e.n.z);
+        }
+        for (int i = -1; i <= 1; i += 2) {
+          float x = float(i) * EASEL_X;
+          box(o, d, vec3(x - 0.032, 0.0, -EASEL_FOOT), vec3(x + 0.032, 0.038, 0.10), M_EASEL, l);
+        }
+        tiltedBox(o, d, vec3(0.0, 0.0, EASEL_REAR), 0.0, -0.2377, vec3(-0.024, 0.0, -0.019), vec3(0.024, 1.6555, 0.019), M_EASEL, l);
+      }
+
+      // The crate at the painter's side (its own frame: the corner's, moved to its footprint —
+      // it shares the corner's yaw, as the candle's crate shares its board's): a plywood crate
+      // open to the front with a shelf, two spare canvas boards stacked in the bottom, and on top
+      // an old tin with brushes standing bristle-up in it, tubes of oil paint and a folded rag.
+      void artBox(vec3 o, vec3 d, inout Hit l) {
+        vec3 b = o - ART_BOX;
+        float tn, tf; vec3 n;
+        if (!slab(b, d, vec3(-ART_BOX_HW - 0.01, 0.0, -ART_BOX_HD - 0.01), vec3(ART_BOX_HW + 0.01, ART_BOX_H + 0.27, ART_BOX_HD + 0.01), tn, tf, n) || tn >= l.t) return;
+        box(b, d, vec3(-ART_BOX_HW, ART_BOX_H - BOX_T, -ART_BOX_HD), vec3(ART_BOX_HW, ART_BOX_H, ART_BOX_HD), M_WOOD, l);
+        box(b, d, vec3(-ART_BOX_HW, 0.0, -ART_BOX_HD), vec3(ART_BOX_HW, BOX_T, ART_BOX_HD), M_WOOD, l);
+        box(b, d, vec3(-ART_BOX_HW, BOX_T, -ART_BOX_HD), vec3(-ART_BOX_HW + BOX_T, ART_BOX_H - BOX_T, ART_BOX_HD), M_WOOD, l);
+        box(b, d, vec3(ART_BOX_HW - BOX_T, BOX_T, -ART_BOX_HD), vec3(ART_BOX_HW, ART_BOX_H - BOX_T, ART_BOX_HD), M_WOOD, l);
+        box(b, d, vec3(-ART_BOX_HW + BOX_T, BOX_T, ART_BOX_HD - BOX_T), vec3(ART_BOX_HW - BOX_T, ART_BOX_H - BOX_T, ART_BOX_HD), M_WOOD, l);
+        box(b, d, vec3(-ART_BOX_HW + BOX_T, ART_BOX_SHELF, -ART_BOX_HD + 0.01), vec3(ART_BOX_HW - BOX_T, ART_BOX_SHELF + BOX_T, ART_BOX_HD - BOX_T), M_WOOD, l);
+        box(b, d, vec3(-0.17, BOX_T, -0.13), vec3(0.16, BOX_T + 0.019, 0.12), M_CANVAS, l); // spare canvas boards stacked in the bottom
+        box(b, d, vec3(-0.155, BOX_T + 0.019, -0.145), vec3(0.175, BOX_T + 0.036, 0.105), M_CANVAS, l);
+        // the tin, and the brushes fanned out of it: a handle, its ferrule and the bristles, which
+        // have not been cleaned
+        vec3 potBase = vec3(POT_C.x, ART_BOX_H, POT_C.y);
+        cylinder(b, d, potBase, potBase + vec3(0.0, POT_H, 0.0), POT_R, M_POT, l);
+        for (int i = 0; i < BRUSH_N; i++) {
+          float a = 6.2831853 * float(i) / float(BRUSH_N) + 0.37;
+          float k = hash2(vec2(float(i), 11.0));
+          vec3 root = potBase + vec3(0.62 * POT_R * cos(a), 0.012, 0.62 * POT_R * sin(a));
+          vec3 dir = normalize(vec3((0.055 + 0.10 * k) * cos(a), 1.0, (0.055 + 0.10 * k) * sin(a)));
+          vec3 top = root + dir * (0.17 + 0.075 * hash2(vec2(float(i), 23.0)));
+          cylinder(b, d, root, top, 0.0045 + 0.0015 * k, M_BRUSH, l);
+          cylinder(b, d, top, top + dir * 0.022, 0.0062, M_METAL, l);
+          cylinder(b, d, top + dir * 0.021, top + dir * 0.048, 0.0052 + 0.002 * k, M_BRISTLE, l);
+        }
+        for (int i = 0; i < PAINT_TUBE_N; i++) {
+          vec4 t = PAINT_TUBE[i];
+          vec3 mid = vec3(t.x, (i < 4 ? ART_BOX_H : ART_BOX_SHELF + BOX_T) + PAINT_TUBE_R, t.y);
+          vec3 axis = vec3(cos(t.z), 0.0, sin(t.z));
+          cylinder(b, d, mid - axis * PAINT_TUBE_L, mid + axis * PAINT_TUBE_L, PAINT_TUBE_R, M_PAINT_TUBE, l);
+          cylinder(b, d, mid + axis * PAINT_TUBE_L, mid + axis * (PAINT_TUBE_L + 0.014), 0.0085, M_PAINT_TUBE, l); // the cap
+        }
+        box(b, d, vec3(-0.19, ART_BOX_H, 0.06), vec3(-0.07, ART_BOX_H + 0.016, 0.16), M_RAG, l); // a rag, folded over once
+        box(b, d, vec3(-0.175, ART_BOX_H + 0.016, 0.075), vec3(-0.095, ART_BOX_H + 0.029, 0.15), M_RAG, l);
+      }
+
+      // The whole corner, in its frame. The mess is spread over nearly three metres of floor, so
+      // inner boxes keep the cost off rays that only pass through part of it: one round the easel
+      // and the canvases stacked just behind it, one round the two further back by the sofa, and one
+      // round the canvas lying flat in front of it. The paint on the floor is colour only.
+      void artCorner(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = artLocal(wo), d = yawLocalDir(wd, ART_C, ART_S);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-0.62, 0.0, -0.82), vec3(1.90, 1.85, 2.10), tn, tf, n) || tn >= h.t) return;
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        if (slab(o, d, vec3(-0.60, 0.0, -0.28), vec3(0.60, 1.85, 1.15), tn, tf, n) && tn < l.t) {
+          easel(o, d, l);
+          for (int i = 0; i < 5; i++) canvasBox(o, d, i, l);
+        }
+        if (slab(o, d, vec3(0.0, 0.0, 1.20), vec3(1.40, 1.00, 2.10), tn, tf, n) && tn < l.t) {
+          canvasBox(o, d, 5, l);
+          canvasBox(o, d, 6, l);
+        }
+        artBox(o, d, l);
+        tiltedBox(o, d, PALETTE_AT, PALETTE_YAW, PALETTE_LEAN, vec3(-PALETTE_HW, 0.0, 0.0), vec3(PALETTE_HW, PALETTE_H, PALETTE_T), M_PALETTE, l);
+        if (slab(o, d, vec3(0.98, 0.0, -0.79), vec3(1.86, 0.05, -0.09), tn, tf, n) && tn < l.t) canvasBox(o, d, CANVAS_N - 1, l);
+        if (l.t < h.t) { h.t = l.t; h.n = yawWorldDir(l.n, ART_C, ART_S); h.m = l.m; }
+      }
+
       // The flame, seen directly: not a surface but a glowing teardrop the ray passes through,
       // summed along the part of the ray in front of tMax (whatever the ray hits). Widest a third
       // of the way up, pointed at the tip, dim at the root where a real flame burns blue; its tip
@@ -884,6 +1140,7 @@
         candleTable(o, d, h);
         sofa(o, d, h);
         workstation(o, d, h);
+        artCorner(o, d, h);
         letters(o, d, h);
         return h;
       }
@@ -907,6 +1164,49 @@
           + 0.4 * blob(q, vec2(0.40, -2.00), 0.06);
         float grain = smoothstep(0.4, 0.78, fbm(q * 16.0 + 3.0));
         return min(dust, 1.0) * grain * 0.8;
+      }
+
+      // A mark of oil paint at c, r across: stretched up to three times along an angle of its own
+      // so nothing comes out a neat circle, its edge broken up, with a drip running off one end
+      // and a few droplets thrown clear of it. seed makes each one different.
+      float splatMask(vec2 q, vec2 c, float r, float seed) {
+        float a = 6.2831853 * hash2(vec2(seed, 1.0));
+        float cs = cos(a), sn = sin(a);
+        vec2 v = q - c;
+        v = vec2(cs * v.x + sn * v.y, cs * v.y - sn * v.x); // into the mark's own direction
+        float stretch = 1.0 + 2.1 * hash2(vec2(seed, 2.0));
+        vec2 u = vec2(v.x / stretch, v.y);
+        float edge = r * (0.68 + 0.46 * noise(u / r * 2.1 + seed));
+        float m = 1.0 - smoothstep(-0.16 * r, 0.16 * r, length(u) - edge);
+        // the drip: a tapering run off the far end of it
+        float run = r * (1.5 + 3.0 * hash2(vec2(seed, 5.0)));
+        float width = r * 0.32 * pow(max(1.0 - v.x / run, 0.0), 1.6);
+        if (v.x > 0.0 && v.x < run) m = max(m, 1.0 - smoothstep(0.55 * width, width, abs(v.y)));
+        for (int i = 0; i < 3; i++) {
+          float da = 6.2831853 * hash2(vec2(seed + 3.0, float(i)));
+          vec2 dc = c + vec2(cos(da), sin(da)) * r * (1.8 + 3.0 * hash2(vec2(seed + 11.0, float(i))));
+          float dr = r * (0.09 + 0.17 * hash2(vec2(seed + 7.0, float(i))));
+          m = max(m, 1.0 - smoothstep(0.55 * dr, dr, length(q - dc)));
+        }
+        return m;
+      }
+
+      // The paint flicked over the floor round the easel (the corner's frame, dabs from..to of
+      // SPLAT) or over the sofa (the sofa's): which colour is on top of that spot, and how much of
+      // it covers the surface there. Colour only — none of it is geometry. Dust is trodden into
+      // every mark, and the big old smears show the concrete through them.
+      vec4 paintOn(vec2 q, int from, int to) {
+        vec3 rgb = vec3(0.0);
+        float cover = 0.0;
+        for (int i = from; i < to; i++) {
+          vec4 s = SPLAT[i];
+          if (abs(q.x - s.x) > 6.0 * s.z || abs(q.y - s.y) > 6.0 * s.z) continue;
+          float m = splatMask(q, s.xy, s.z, float(i) * 1.7 + 0.3);
+          if (m <= 0.0) continue;
+          rgb = mix(rgb, mix(PAINT[int(s.w)], vec3(0.55), 0.10 + 0.24 * noise(q * 90.0)), m); // a later dab lands on top of an earlier one
+          cover = max(cover, m * mix(1.0, 0.40, smoothstep(0.06, 0.18, s.z))); // the wide ones have been walked over for years
+        }
+        return vec4(rgb, cover);
       }
 
       float albedo(int m, vec3 p) {
@@ -949,18 +1249,24 @@
         if (m == M_LETTER) return 0.86 + 0.03 * (noise(p.xy * 90.0) - 0.5);
         if (m == M_WIRE) return 0.75;
         if (m == M_WOOD) {
-          // pine boards: grain running along each board, two boards to a panel, darker end grain on
-          // the edges. Three crates are made of it: the record player's, the candle's (stood on
-          // end, with a shelf) and the work station's (taller, two shelves).
-          float dCandle = distance(p.xz, CANDLE_TABLE_POS.xz), dTable = distance(p.xz, TABLE_POS.xz), dDesk = distance(p.xz, DESK_POS.xz);
-          int which = dDesk < min(dCandle, dTable) ? 2 : dCandle < dTable ? 1 : 0;
-          vec3 q = which == 2 ? deskLocal(p) : which == 1 ? crateLocal(p) : tableLocal(p);
-          vec3 size = which == 2 ? vec3(DESK_HW, DESK_H, DESK_HD) : which == 1 ? vec3(CRATE_HW, CRATE_H, CRATE_HD) : vec3(BOX_HW, BOX_H, BOX_HD); // half width, height, half depth
-          float shelfY = which == 1 ? SHELF_Y : which == 2 ? (q.y < 0.5 * (DESK_S1 + DESK_S2) ? DESK_S1 : DESK_S2) : -1.0;
+          // oak boards: grain running along each board, two boards to a panel, darker end grain on
+          // the edges. Four crates are made of it: the record player's, the candle's (stood on end,
+          // with a shelf), the work station's (taller, two shelves) and the one by the easel.
+          vec2 artBoxXZ = ART_POS.xz + vec2(ART_C * ART_BOX.x + ART_S * ART_BOX.z, -ART_S * ART_BOX.x + ART_C * ART_BOX.z);
+          float d0 = distance(p.xz, TABLE_POS.xz), d1 = distance(p.xz, CANDLE_TABLE_POS.xz);
+          float d2 = distance(p.xz, DESK_POS.xz), d3 = distance(p.xz, artBoxXZ);
+          int which = 0;
+          float best = d0;
+          if (d1 < best) { which = 1; best = d1; }
+          if (d2 < best) { which = 2; best = d2; }
+          if (d3 < best) { which = 3; best = d3; }
+          vec3 q = which == 3 ? artLocal(p) - ART_BOX : which == 2 ? deskLocal(p) : which == 1 ? crateLocal(p) : tableLocal(p);
+          vec3 size = which == 3 ? vec3(ART_BOX_HW, ART_BOX_H, ART_BOX_HD) : which == 2 ? vec3(DESK_HW, DESK_H, DESK_HD) : which == 1 ? vec3(CRATE_HW, CRATE_H, CRATE_HD) : vec3(BOX_HW, BOX_H, BOX_HD); // half width, height, half depth
+          float shelfY = which == 1 ? SHELF_Y : which == 3 ? ART_BOX_SHELF : which == 2 ? (q.y < 0.5 * (DESK_S1 + DESK_S2) ? DESK_S1 : DESK_S2) : -1.0;
           bool shelf = shelfY > 0.0 && q.y > shelfY - 1e-3 && q.y < shelfY + BOX_T + 1e-3 && abs(q.x) < size.x - BOX_T + 1e-3;
           bool lying = shelf || q.y > size.y - BOX_T - 1e-3 || q.y < BOX_T + 1e-3; // top or bottom
           bool side = !lying && abs(q.x) > size.x - BOX_T - 1e-3;
-          vec2 g = (lying ? q.xz : side ? q.zy : q.xy) + (which == 1 ? 13.0 : which == 2 ? 29.0 : 0.0); // along the board, across it
+          vec2 g = (lying ? q.xz : side ? q.zy : q.xy) + (which == 1 ? 13.0 : which == 2 ? 29.0 : which == 3 ? 47.0 : 0.0); // along the board, across it
           float a = 0.47 + 0.17 * (fbm(vec2(g.x * 2.5, g.y * 38.0 + fbm(g * 6.0) * 2.0)) - 0.5);
           a += 0.07 * (noise(vec2(g.x * 5.0, g.y * 160.0)) - 0.5);
           a *= 1.0 - 0.45 * edgeLine((lying ? q.z : q.y - 0.5 * size.y), 0.0025); // the joint between the two boards
@@ -1038,6 +1344,19 @@
           vec3 q = deskLocal(p);
           float along = (q.x + 0.145) / -0.09; // 0 at the point (its right end), 1 at the other end
           return along < 0.035 ? 0.04 : along < 0.16 ? 0.72 : 0.6 + 0.08 * step(0.5, fract(atan(q.y - DESK_H - 0.0035, q.z + 0.115 + 0.667 * (q.x + 0.145)) * 0.955)); // lead, sharpened wood, the faceted body
+        }
+        if (m == M_EASEL) {
+          // the easel's battens: grain running up each one (the mast's parts are axis-aligned in
+          // the mast's frame, the feet and rear leg near enough), worn paler along the edges
+          vec3 q = easelLocal(artLocal(p));
+          float a = 0.54 + 0.15 * (fbm(vec2(q.y * 2.4, (q.x + q.z) * 46.0)) - 0.5);
+          a += 0.05 * (noise(vec2(q.y * 6.0, (q.x + q.z) * 190.0)) - 0.5);
+          return a * (1.0 - 0.12 * smoothstep(0.45, 0.8, fbm(q.xy * 9.0 + 21.0))); // years of paint wiped off it
+        }
+        if (m == M_BRUSH) {
+          // long varnished handles, the paint that has crept down them never quite cleaned off
+          vec3 q = artLocal(p) - ART_BOX;
+          return 0.46 + 0.16 * hash2(floor(q.xz * 90.0) + 17.0) + 0.04 * (noise(q.xy * 400.0) - 0.5);
         }
         if (m == M_BOOK) {
           // three hardbacks lying flat, spines out: dark cloth, a paler one, a mid one, with the
@@ -1157,11 +1476,148 @@
         return 0.5;
       }
 
-      // A surface's colour. Everything in the hall is grey; the candle's jar is navy glass with its
-      // printing in gold, and its wax is cream.
+      // ---- the colours of the art corner ----
+      // The paint on a spare canvas's face: a window of four of CSPLAT, chosen by which canvas it
+      // is, so no two are splattered alike.
+      vec4 canvasPaint(vec2 q, int i) {
+        vec3 rgb = vec3(0.0);
+        float cover = 0.0;
+        for (int j = 0; j < 4; j++) {
+          vec4 s = CSPLAT[(3 * i + j) % CSPLAT_N];
+          if (abs(q.x - s.x) > 6.0 * s.z || abs(q.y - s.y) > 6.0 * s.z) continue;
+          float m = splatMask(q, s.xy, s.z, float(i) * 5.3 + float(j) * 1.9 + 0.7);
+          if (m <= 0.0) continue;
+          rgb = mix(rgb, PAINT[int(s.w)], m);
+          cover = max(cover, m);
+        }
+        return vec4(rgb, cover);
+      }
+
+      // A canvas: primed cotton over a stretcher — the face, the sides where the cloth folds round
+      // the bars, and the back, a pale wooden bar round the border with slack cloth inside. Every
+      // one has paint on it except the easel's, which is left clean: the site hangs my paintings on
+      // that one.
+      vec3 canvasSurface(vec3 p) {
+        const vec3 linen = vec3(1.0, 0.975, 0.93); // primed cotton, a shade warm
+        vec3 q = artLocal(p);
+        for (int i = 0; i < CANVAS_N; i++) {
+          vec3 f = CANVAS_FORM[i];
+          vec3 c = canvasLocal(q, i);
+          if (abs(c.x) > 0.5 * f.y + 2e-3 || c.y < -2e-3 || c.y > f.z + 2e-3 || c.z < -2e-3 || c.z > CANVAS_T + 2e-3) continue;
+          float weave = 0.5 * (noise(c.xy * 880.0) + noise(c.yx * 640.0)) - 0.5;
+          float inset = min(0.5 * f.y - abs(c.x), min(c.y, f.z - c.y));
+          if (c.z < 1e-3) { // the face: gesso, a little uneven, darker where the cloth folds over the edge
+            float a = 0.84 + 0.05 * weave - 0.05 * smoothstep(0.55, 0.85, fbm(c.xy * 7.0 + float(i) * 3.0));
+            a *= 1.0 - 0.07 * (1.0 - smoothstep(0.0, 0.014, inset));
+            if (i == 0) return a * linen;
+            vec4 splat = canvasPaint(c.xy, i);
+            return mix(a * linen, splat.rgb, splat.w);
+          }
+          if (c.z > CANVAS_T - 1e-3) return inset < 0.036 // the back
+            ? (0.58 + 0.14 * (fbm(vec2(c.x * 2.2, c.y * 44.0)) - 0.5)) * mix(linen, OAK, 0.55) // a stretcher bar
+            : (0.63 + 0.06 * weave) * linen; // the cloth between them
+          return (0.76 + 0.05 * weave) * linen; // the sides
+        }
+        return 0.84 * linen;
+      }
+
+      // The palette: an old board darkened by oil, with a blob of each colour squeezed round its
+      // top edge and what has been mixed from them dragged across the middle.
+      vec3 paletteSurface(vec3 p) {
+        vec3 q = paletteLocal(artLocal(p));
+        vec3 wood = vec3(0.40, 0.27, 0.16);
+        if (q.z > 0.5 * PALETTE_T) return wood * 0.75; // its back, against the crate
+        vec2 uv = vec2(q.x / PALETTE_HW, q.y / PALETTE_H); // -1..1 across it, 0..1 up it
+        vec2 aspect = vec2(1.0, PALETTE_H / PALETTE_HW); // so a blob comes out round
+        vec3 col = wood * (0.88 + 0.24 * noise(uv * 26.0));
+        for (int i = 0; i < PAINT_N; i++) {
+          vec2 c = vec2(mix(-0.76, 0.76, (float(i) + 0.5) / float(PAINT_N)), 0.80 + 0.05 * sin(float(i) * 2.3));
+          float r = 0.10 + 0.05 * hash2(vec2(float(i), 4.0));
+          col = mix(col, PAINT[i], 1.0 - smoothstep(0.62 * r, r, length((uv - c) * aspect)));
+        }
+        float mixed = smoothstep(0.62, 0.28, uv.y) * smoothstep(0.34, 0.80, fbm(uv * vec2(5.0, 7.0) + 3.0));
+        vec3 muddy = mix(PAINT[0] * 0.6 + PAINT[1] * 0.45, PAINT[5] * 0.75, 0.4 + 0.45 * noise(uv * 9.0));
+        return mix(col, muddy, 0.85 * mixed);
+      }
+
+      // A tube of oil paint: a tin body with the colour it holds printed round the middle, the
+      // crimped tail at one end and a cap of the same colour at the other.
+      vec3 tubeSurface(vec3 p) {
+        vec3 q = artLocal(p) - ART_BOX;
+        for (int i = 0; i < PAINT_TUBE_N; i++) {
+          vec4 t = PAINT_TUBE[i];
+          float y = (i < 4 ? ART_BOX_H : ART_BOX_SHELF + BOX_T) + PAINT_TUBE_R;
+          if (abs(q.y - y) > PAINT_TUBE_R + 3e-3) continue;
+          vec2 v = q.xz - t.xy;
+          float cs = cos(t.z), sn = sin(t.z);
+          float along = v.x * cs + v.y * sn, side = -v.x * sn + v.y * cs;
+          if (abs(along) > PAINT_TUBE_L + 0.02 || abs(side) > PAINT_TUBE_R + 3e-3) continue;
+          vec3 paint = PAINT[int(t.w)];
+          if (along > PAINT_TUBE_L) return paint * 0.8; // the cap
+          float u = (along + PAINT_TUBE_L) / (2.0 * PAINT_TUBE_L); // 0 at the crimped tail, 1 at the neck
+          if (u < 0.13) return vec3(0.6, 0.59, 0.57) * (0.82 + 0.36 * step(0.5, fract(side * 110.0))); // the crimp
+          if (abs(u - 0.52) < 0.21) return paint; // the band of colour it holds
+          return vec3(0.76, 0.75, 0.72) * (0.92 + 0.16 * noise(vec2(along, side) * 500.0));
+        }
+        return vec3(0.74, 0.73, 0.70);
+      }
+
+      // Bristles that have not been cleaned: each brush keeps whatever it was last used with,
+      // strongest at the tip. Which colour comes from where the cluster is, so a brush is one colour.
+      vec3 bristleSurface(vec3 p) {
+        vec3 q = artLocal(p) - ART_BOX;
+        vec3 paint = PAINT[min(int(hash2(floor(q.xz * 80.0) + 3.0) * float(PAINT_N)), PAINT_N - 1)];
+        float tip = smoothstep(0.0, 0.03, q.y - (ART_BOX_H + 0.20));
+        return mix(vec3(0.70, 0.66, 0.56), paint, 0.3 + 0.55 * tip);
+      }
+
+      // The tin the brushes stand in: galvanised, with what has run down the inside of it dried
+      // over the outside.
+      vec3 potSurface(vec3 p) {
+        vec3 q = artLocal(p) - ART_BOX - vec3(POT_C.x, 0.0, POT_C.y);
+        float a = 0.52 + 0.08 * (noise(vec2(atan(q.z, q.x) * 9.0, q.y * 120.0)) - 0.5);
+        float run = smoothstep(0.52, 0.78, fbm(vec2(atan(q.z, q.x) * 3.4, q.y * 7.0 - 4.0)));
+        vec3 paint = PAINT[min(int(hash2(vec2(floor(atan(q.z, q.x) * 2.2), 8.0)) * float(PAINT_N)), PAINT_N - 1)];
+        return mix(vec3(a) * vec3(1.0, 0.99, 0.97), paint * 0.8, 0.75 * run);
+      }
+
+      // A rag: cotton, stained with everything wiped onto it.
+      vec3 ragSurface(vec3 p) {
+        vec2 uv = (artLocal(p) - ART_BOX).xz * 26.0;
+        float cloth = 0.68 + 0.12 * (fbm(uv * 2.4) - 0.5);
+        float stain = smoothstep(0.45, 0.72, fbm(uv + 11.0));
+        vec3 paint = PAINT[min(int(hash2(floor(uv * 0.6) + 5.0) * float(PAINT_N)), PAINT_N - 1)];
+        return mix(vec3(cloth) * vec3(1.0, 0.98, 0.94), paint * 0.7, 0.8 * stain);
+      }
+
+      // A surface's colour. The hall itself is grey — concrete, slate, steel, the fleece sofa, the
+      // card letters. What really has a colour gets it: the candles' navy glass and gold printing,
+      // their cream wax, the oak the crates and the easel are made of, the primed cotton of the
+      // canvases, and the oil paint — in the tubes, on the palette, on the brushes, and flicked
+      // over the floor round the easel and onto the sofa.
       vec3 surface(int m, vec3 p, vec3 n) {
         if (m == M_WAX) return vec3(0.87, 0.84, 0.77);
-        if (m != M_GLASS) return vec3(albedo(m, p));
+        if (m == M_CANVAS) return canvasSurface(p);
+        if (m == M_PALETTE) return paletteSurface(p);
+        if (m == M_PAINT_TUBE) return tubeSurface(p);
+        if (m == M_BRISTLE) return bristleSurface(p);
+        if (m == M_POT) return potSurface(p);
+        if (m == M_RAG) return ragSurface(p);
+        if (m != M_GLASS) {
+          float a = albedo(m, p);
+          if (m == M_WOOD || m == M_EASEL) return a * OAK;
+          if (m == M_BRUSH) return a * vec3(1.0, 0.89, 0.72); // varnished handles
+          // paint flicked over the concrete round the easel, and over the sofa. The floor is the
+          // most-hit surface in the hall, so one box test keeps the dabs' loop off the rest of it.
+          if (m == M_FLOOR) {
+            vec2 q = artLocal(p).xz;
+            if (q.x < -1.05 || q.x > 2.0 || q.y < -1.65 || q.y > 2.15) return vec3(a);
+            vec4 s = paintOn(q, 0, SPLAT_FLOOR);
+            return mix(vec3(a), s.rgb, s.w);
+          }
+          if (m == M_SOFA) { vec4 s = paintOn(sofaLocal(p).xz, SPLAT_FLOOR, SPLAT_N); return mix(vec3(a), s.rgb, s.w); }
+          return vec3(a);
+        }
         vec3 q = jarLocal(p, nearestJar(p));
         if (n.y > 0.5) return vec3(0.12, 0.16, 0.3); // the rim
         if (dot(n.xz, q.xz) < 0.0) return vec3(0.03, 0.05, 0.13); // the inside of the wall, above the wax
@@ -2159,6 +2615,11 @@
         // scene constants the JS needs, read out of the shader so the two can't drift
         const num = (name) => Number(fs.match(new RegExp(`\\b${name} = (-?[\\d.]+)`))[1])
         const vec = (name) => fs.match(new RegExp(`\\b${name} = vec[23]\\(([^)]*)\\)`))[1].split(',').map(Number)
+        // a const array of vectors (CANVAS_POS and the like), as a list of number arrays
+        const list = (name) => {
+          const body = fs.match(new RegExp(`\\b${name}\\[[^\\]]*\\] = vec[234]\\[[^\\]]*\\]\\(([\\s\\S]*?)\\);`))[1]
+          return [...body.matchAll(/vec[234]\(([^)]*)\)/g)].map((m) => m[1].split(',').map(Number))
+        }
         const CANDLE_RGB = vec('CANDLE_RGB')
 
         const canvas = document.getElementById('out')
@@ -2299,6 +2760,14 @@
         const lid = (x, v) => desk([lapC[0] + x, deskH + lapT + lidC * v, lapC[1] + hingeZ + lidS * v])
         // where each candle's flame is: the jars' frames in the world (see jarOrigin in the shader)
         const jars = [crate([candleC[0], crateH, candleC[1]]), desk([deskJar[0], deskH, deskJar[1]])]
+        // The art corner. The easel's canvas is the one the site hangs my paintings on: it stands
+        // on the ledge and leans back with the mast, so a point v up its face and u across it is at
+        // (u, base + v·cos(lean), z + v·sin(lean)) in the corner's frame — the same maths as
+        // canvasLocal in the shader, the other way round.
+        const art = (p) => yawWorld(vec('ART_POS'), num('ART_C'), num('ART_S'), p)
+        const artBox = vec('ART_BOX'), leanC = num('EASEL_LEAN_C'), leanS = num('EASEL_LEAN_S')
+        const canvas0 = list('CANVAS_POS')[0], form0 = list('CANVAS_FORM')[0]
+        const canvasFace = (u, v) => art([canvas0[0] + u * 0.5 * form0[1], canvas0[1] + v * form0[2] * leanC, canvas0[2] + v * form0[2] * leanS])
         const halfW = num('BOARD_HALF_W'), y0 = num('BOARD_Y0'), y1 = y0 + num('BOARD_H')
         const [recX, recZ] = vec('REC_C'), recY = num('REC_Y')
         // A 12" sleeve standing on the floor, leaning back against the box's right side (+x in
@@ -2345,6 +2814,14 @@
           ].map(round),
           // the corners of the box round the work station: the crate with the laptop and candle on it, and the papers round its feet
           workstation: boxCorners([-0.6, 0, -0.8], [0.68, deskH + 0.24, 0.24]).map(desk).map(round),
+          // the blank canvas on the easel, seen from the front: top left, top right, bottom right,
+          // bottom left, like the boards. The site hangs my paintings on it.
+          easelCanvas: [canvasFace(-1, 1), canvasFace(1, 1), canvasFace(1, 0), canvasFace(-1, 0)].map(round),
+          // the corners of the box round the art corner: the easel, the canvases stacked just behind
+          // it, the crate with the brushes and paint, and the palette. Not the two canvases further
+          // back by the sofa, nor the one lying in front of it — the hotspot would reach across the
+          // sofa, which is something else you press.
+          artCorner: boxCorners([-0.62, 0, -0.82], [0.7, 1.8, 1.15]).map(art).map(round),
         }
         // the dog's patch in the loops: his ribs and what blends into them (the smin reaches 8 cm), wherever his
         // breathing takes them — not his head, paws or tail, which don't move (a box round all of him reached into

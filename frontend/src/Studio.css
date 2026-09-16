@@ -957,3 +957,410 @@
     animation: none;
   }
 }
+/* ---- the art corner (Easel.tsx) ---- */
+
+/* The canvas on the easel at 1 px = 1 mm, laid onto the rendered blank canvas by planeTransform
+   like the board and the laptop's screen. --px is how big one of its px is on the real screen at
+   the close-up, so the label can be given a size that reads on a phone as on a monitor. The render
+   leaves the canvas blank; what I have painted fades onto it when you get there. */
+.easel-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 700px;
+  height: 900px;
+  transform-origin: 0 0;
+  pointer-events: auto;
+}
+
+.easel-press {
+  position: absolute;
+  inset: 22px;
+  display: block;
+  text-decoration: none;
+  animation: easel-show 0.6s 0.35s ease-out both;
+}
+
+@keyframes easel-show {
+  from {
+    opacity: 0;
+    scale: 1.02;
+  }
+}
+
+/* The paintings on the canvas: a contact sheet of the first few, two across, every one cropped to
+   its cell so the sheet fills the canvas squarely however tall or wide the paintings happen to be.
+   Their real proportions are on the wall, where there is room for them. */
+.easel-face-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 1fr;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.easel-face-item {
+  display: block;
+  overflow: hidden;
+  background: #cfc6b4;
+
+  & img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+/* what to do about it, written along the bottom of the canvas over a soft wash */
+.easel-press-label {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: calc(26px / var(--px)) calc(16px / var(--px)) calc(12px / var(--px));
+  font-family: var(--sans);
+  font-size: calc(15px / var(--px));
+  font-style: italic;
+  line-height: 1.2;
+  color: #2a2620;
+  text-align: center;
+  background: linear-gradient(rgb(238 232 218 / 0), rgb(238 232 218 / 0.82) 45%, rgb(238 232 218 / 0.95));
+}
+
+.easel-press:hover .easel-press-label,
+.easel-press:focus-visible .easel-press-label {
+  color: #0f0e0c;
+  background: linear-gradient(rgb(240 231 210 / 0), rgb(240 231 210 / 0.9) 40%, rgb(242 232 208 / 1));
+}
+
+/* a warm lift over the whole canvas under the pointer, so it reads as pressable */
+.easel-press::after {
+  content: '';
+  position: absolute;
+  inset: -22px;
+  background: rgb(255 240 210 / 0);
+  transition: background-color 0.3s;
+}
+
+.easel-press:hover::after,
+.easel-press:focus-visible::after {
+  background: rgb(255 240 210 / 0.16);
+}
+
+.easel-canvas.is-open .easel-press {
+  visibility: hidden;
+}
+
+/* ---- the canvas opened out to the screen: the wall of paintings ---- */
+/* It grows out of wherever the canvas is in the shot (--grow-x/y is the middle of it on screen,
+   --grow-scale how much of the screen's height it fills), so it reads as that canvas getting big
+   enough to look at rather than a window opening on top of it. */
+.art-wall {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #211e19;
+  background-color: #eee7d7;
+  background-image:
+    repeating-linear-gradient(90deg, rgb(120 104 78 / 0.05) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(rgb(120 104 78 / 0.05) 0 1px, transparent 1px 3px),
+    radial-gradient(120% 90% at 30% 0%, rgb(255 250 238 / 0.9), rgb(226 215 194 / 0.9));
+/* It stays mounted the whole time you stand at the easel so that it grows shut as well as open;
+   shrunk onto the canvas it is hidden and untouchable, and visibility is in the transition so it
+   stays on screen for the whole way down before it goes. */
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(var(--grow-scale));
+  transform-origin: var(--grow-x) var(--grow-y);
+  transition:
+    transform 0.55s cubic-bezier(0.22, 0.85, 0.28, 1),
+    opacity 0.32s ease-out,
+    visibility 0.55s;
+
+  &.is-shown {
+    visibility: visible;
+    pointer-events: auto;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* the stretcher the canvas is wrapped over, all the way round the screen — over the bar too, or
+   the sticky bar would paint out the top edge of it */
+.art-wall::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  border: 7px solid rgb(146 108 62 / 0.55);
+  box-shadow: inset 0 0 26px rgb(96 72 40 / 0.16);
+  pointer-events: none;
+}
+
+.art-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 18px 22px 14px;
+  background: linear-gradient(rgb(238 231 215 / 0.97), rgb(238 231 215 / 0.82) 70%, rgb(238 231 215 / 0));
+  backdrop-filter: blur(2px);
+}
+
+.art-title {
+  margin: 0;
+  font-family: var(--heading);
+  font-size: clamp(26px, 5vw, 40px);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.art-bar-buttons {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.art-button {
+  padding: 6px 16px;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.2;
+  color: #1c1c1c;
+  text-decoration: none;
+  cursor: pointer;
+  background: #fbfbf8;
+  border: 3px solid #1c1c1c;
+  border-radius: 999px;
+  box-shadow: 0 3px 0 #1c1c1c;
+  transition:
+    translate 0.15s,
+    box-shadow 0.15s;
+
+  &:hover {
+    translate: 0 -2px;
+    box-shadow: 0 5px 0 #1c1c1c;
+  }
+
+  &:active {
+    translate: 0 2px;
+    box-shadow: 0 1px 0 #1c1c1c;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+    translate: none;
+    box-shadow: 0 3px 0 #1c1c1c;
+  }
+}
+
+.art-close {
+  padding: 6px 13px;
+}
+
+/* The way in to adding a painting, for whoever knows the word: faint enough that a visitor doesn't
+   read it as something for them, a real target for me. shift+A does the same thing. */
+.art-unlock {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 20px;
+  line-height: 1;
+  color: #1c1c1c;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  opacity: 0.22;
+  transition:
+    opacity 0.2s,
+    background-color 0.2s;
+
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+    background: rgb(28 28 28 / 0.08);
+  }
+}
+
+/* the wall itself: pinned up in columns, as tall as each painting happens to be */
+.art-grid {
+  margin: 0;
+  padding: 0 22px 60px;
+  columns: 250px 5;
+  column-gap: 20px;
+  list-style: none;
+}
+
+.art-pin {
+  margin: 0 0 20px;
+  break-inside: avoid;
+
+  & a {
+    position: relative;
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    background: #d8cfbb;
+    box-shadow: 0 2px 10px rgb(60 48 28 / 0.18);
+    transition:
+      translate 0.2s,
+      box-shadow 0.2s;
+  }
+
+  & a:hover,
+  & a:focus-visible {
+    translate: 0 -4px;
+    box-shadow: 0 10px 22px rgb(60 48 28 / 0.26);
+  }
+
+  & img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+}
+
+.art-caption {
+  display: block;
+  padding: 9px 12px 11px;
+  font-size: 14px;
+  line-height: 1.3;
+  background: rgb(250 246 236 / 0.92);
+
+  & strong {
+    display: block;
+    font-weight: 500;
+  }
+
+  & em {
+    opacity: 0.68;
+  }
+}
+
+.art-empty {
+  margin: 12vh auto;
+  font-family: var(--heading);
+  font-size: clamp(22px, 4vw, 30px);
+  font-style: italic;
+  text-align: center;
+
+  & span {
+    display: block;
+    margin-top: 10px;
+    font-family: var(--sans);
+    font-size: 15px;
+    font-style: normal;
+    opacity: 0.6;
+  }
+}
+
+.art-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 0 22px 22px;
+  padding: 16px;
+  background: rgb(252 249 242 / 0.8);
+  border: 2px dashed rgb(120 98 62 / 0.5);
+  border-radius: 10px;
+}
+
+.art-field {
+  flex: 1 1 130px;
+  min-width: 0;
+  padding: 8px 12px;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: inherit;
+  background: #fffdf7;
+  border: 2px solid rgb(28 28 28 / 0.55);
+  border-radius: 6px;
+}
+
+.art-field-short {
+  flex: 0 1 110px;
+}
+
+.art-file {
+  flex: 1 1 100%;
+  cursor: pointer;
+
+  & input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  & span {
+    display: block;
+    padding: 10px 12px;
+    font-family: var(--sans);
+    font-size: 16px;
+    text-align: center;
+    background: #fffdf7;
+    border: 2px solid rgb(28 28 28 / 0.55);
+    border-radius: 6px;
+  }
+
+  & input:focus-visible + span {
+    outline: 2px solid #1c1c1c;
+    outline-offset: 2px;
+  }
+}
+
+.art-problem {
+  flex: 1 1 100%;
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  color: #8a2b16;
+}
+
+@media (max-width: 520px) {
+  .art-grid {
+    padding-inline: 14px;
+    columns: 150px 2;
+    column-gap: 14px;
+  }
+
+  .art-bar {
+    padding-inline: 14px;
+  }
+
+  .art-add {
+    margin-inline: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .easel-press {
+    animation: none;
+  }
+
+  .art-wall {
+    transition: opacity 0.2s;
+    transform: none;
+  }
+
+  .art-pin a:hover,
+  .art-pin a:focus-visible {
+    translate: none;
+  }
+}

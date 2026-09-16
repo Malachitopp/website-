@@ -1,6 +1,6 @@
 # malachitopp.com — project context
 
-Last updated: 2026-09-15
+Last updated: 2026-09-16
 
 ## What this is
 Personal site on a domain the user already owns. Not a single-purpose portfolio —
@@ -26,6 +26,14 @@ board, a tall crate of books with an open laptop on it (its screen shows GitHub'
 second Carby Musk candle burning beside it, and scribbled sheets of physics on the floor;
 press it to walk up (`/studio/laptop`) and the screen wakes to a home screen of shortcuts
 ("all my links and academic stuff" — GitHub and email so far, the user names the rest).
+The third item is the **art corner** (built 2026-09-16), on the left of the sofa: a wooden
+easel with a blank canvas, spare canvases leaning behind it and one lying face up on the
+floor in front of the sofa, an oak crate with a tin of painty brushes, tubes of oil paint
+and a palette, and oil paint flicked over the concrete and onto the sofa. Press it to walk
+up (`/studio/easel`); press the canvas and it opens out to fill the screen as a scrolling
+wall of the user's paintings (`/studio/easel/paintings`). **This is where the colour came
+in**: the user asked for the paint and the wood to be in real colour against the grey hall
+(see *Colour* below), so every crate is oak now, not grey.
 On arriving in the studio a dismissible note at the top says "explore by pressing on
 things" (added 2026-09-15). The name + Spotify content that used to be the whole site
 still lives on its own page.
@@ -42,9 +50,10 @@ still lives on its own page.
   on the History API: `usePathname()` (via `useSyncExternalStore`, listening to
   `popstate` plus a custom `app:navigate` event because `pushState` fires nothing),
   `navigate(to)`, and `isModifiedClick(event)` so ctrl/middle-clicks still open
-  new tabs. `App.tsx` is a `switch` on the pathname: `/studio`, `/studio/music` and
-  `/studio/laptop` → `Studio` (the same element, so it keeps its state and walks between them),
-  `/spotify` → `SpotifyPage`, anything else → `Home`.
+  new tabs. `App.tsx` is a `switch` on the pathname: `/studio`, `/studio/music`,
+  `/studio/laptop`, `/studio/easel` and `/studio/easel/paintings` → `Studio` (the same element,
+  so it keeps its state and walks between them), `/spotify` → `SpotifyPage`, anything else →
+  `Home`.
 - **Backend**: Node + TypeScript + Express 5, in `src/backend/`. Compiled with `tsc`
   (root `tsconfig.json`, `rootDir: ./src`, `outDir: ./dist`) — so the real entry
   point after build is `dist/backend/index.js`, **not** `dist/index.js`.
@@ -59,9 +68,11 @@ still lives on its own page.
   **no ORM** — schema is small/simple enough that an ORM would add ceremony without
   benefiting. `db.ts` exports a `Pool` built from `DATABASE_URL`.
 - **Migrations**: plain `.sql` files in `src/migrations/`. `migrations_001.sql`
-  defines the `spotify_cache` table (see Schema section) — written but **not yet
-  run against the actual local Postgres DB**. `migrations_002.sql` exists but is
-  **empty** (the user created it; nothing decided about what goes in it).
+  defines the `spotify_cache` table (see Schema section). `migrations_002.sql`
+  defines the `art` table. **Both applied 2026-09-16** — the first time anything in
+  this project successfully reached Postgres. Applied by hand (read the file, run it
+  through `pool.query`); there's still no migration runner or tracking table, so
+  re-running one would error on the `CREATE TABLE`.
 - **Module system**: root `package.json` is `"type": "module"` (ESM), tsconfig
   uses `"module": "nodenext"` + `"verbatimModuleSyntax": true`. Relative imports
   between own files need explicit `.js` extensions even though source is `.ts`.
@@ -73,8 +84,16 @@ still lives on its own page.
     `NODE_ENV !== 'production'` because forgetting to set a var should hide the
     routes, not expose them. The `authRouter` import stays unconditional because
     `get_accessToken` (same file) is needed by the Spotify routes.
+  - `app.use(express.json())` (added 2026-09-16 for the art POST). Express 5
+    parses **no** body without it, and only parses requests whose `content-type`
+    is `application/json` — a POST missing that header arrives with `req.body`
+    unset and fails validation as though the fields were missing.
   - `spotifyRouter` (named export from `src/backend/spotify/getCurrent.ts`) mounted
     at `/api`, giving `/api/now-playing` and `/api/top/:type`.
+  - `artRouter` (named export from `src/backend/art/art.ts`) mounted at
+    **`/api/art`** (not `/api`), so its own paths are `'/'` and `'/signature'`.
+    Deliberately **not** behind an `ENABLE_…` flag — unlike the Spotify login
+    routes, the gallery has to work in production.
   - `src/backend/spotify/getTop.ts` is imported for its **side effect only**
     (`import './spotify/getTop.js'`) — it adds a route onto the shared
     `spotifyRouter` instance. Any new route-adding file like this must be imported
@@ -98,6 +117,13 @@ still lives on its own page.
   `verbatimModuleSyntax` caused TS1295 — fixed with `"type": "module"`.
 - `pg-pool` got added to `dependencies` unnecessarily — `pg` already exports
   `Pool`. Still present; harmless, removable.
+- **CommonJS syntax pasted from docs into ESM files** (2026-09-16, hit twice):
+  `const cloudinary = require('cloudinary').v2` and `exports.myconfig = …` both
+  throw `ReferenceError: … is not defined in ES module scope` at import time. The
+  trap is that **`tsc --noEmit` passes clean** — `@types/node` declares `require`
+  and `exports` as globals — so this is only caught by running the built file.
+  `tsc` also has no `noEmitOnError`, so a broken build still produces a runnable
+  `dist`. Cloudinary's docs are CommonJS throughout; translate as you paste.
 - `.env`/Compose `$` confusion: Compose expands `${VAR}` in `docker-compose.yaml`
   from `.env`, but Node's `--env-file` does NOT expand `${VAR}` inside `.env`
   values — so `DATABASE_URL` must be a literal full string.
@@ -256,20 +282,54 @@ still lives on its own page.
   (or `.studio` not to have `is-setting-off`). A half-second-by-half-second state probe
   (`chain-probe.mjs` in the scratchpad) showed every walk arriving on time.
 
+- **Material names in the shader are one flat namespace.** Adding `M_TUBE` for a tube of oil
+  paint failed to compile with `'M_TUBE' : redefinition` — the fluorescent tubes already had it.
+  It is now `M_PAINT_TUBE`, and its constants are `PAINT_TUBE_*` (note `TUBE_LE`, `TUBE_Y`,
+  `TUBE_T`… belong to the lights). Grep the `M_` list before naming a new material.
+- **Don't run `prettier` on this repo.** There is no prettier config, so its defaults
+  (double quotes, semicolons) are the opposite of the code's style and it reformatted all of
+  `MusicCorner.tsx` in one go. `npx eslint src/` and `npx tsc -b` are the checks; formatting is
+  by hand, matching the file.
+- **An overlay must not be drawn for a point behind the camera.** `project()` happily returns a
+  mirrored position for one, so from the laptop and the easel close-ups — where your back is to
+  the music corner — the now-playing hologram, its light beam and the notes were stuck to the
+  edge of the frame labelling a record player nobody could see. `MusicCorner` now checks
+  `record.z > 0` (and the board's middle separately) before drawing any of it. Any new overlay
+  pinned to a fixed point in the scene needs the same guard.
+- **CSS `columns` inside a fixed-height box doesn't balance**, it fills the first column to that
+  height and then starts the second — which left the contact sheet on the easel's canvas with one
+  column full and the other nearly empty on a phone. Use a grid with `grid-auto-rows: 1fr` and
+  `object-fit: cover` where the box has a definite height; keep `columns` for the wall, which is
+  free to grow.
+- **ANGLE compiles the path tracer on the first draw, not on link**, so the first still of a run
+  can report tens of seconds (46 s was seen at 960×600, 64 spp) while every still after it in the
+  same browser takes well under a second. Don't read that first number as the scene having got
+  slow — `render.mjs` starts a fresh Chrome per job, so it pays this once per job.
+
 ## Schema philosophy (important, keep revisiting this)
-- **No `users` table** — single-user site. Auth for write actions (uploading art,
-  etc.) should be a secret checked against an env var, not a real auth system.
-  **Not built yet.**
+- **No `users` table** — single-user site. Auth for write actions is a shared
+  secret checked against an env var, not a real auth system. **Built 2026-09-16**
+  as `requireSecret` in `src/backend/art/art.ts` (see the art backend section).
 - **`spotify_cache` table exists in the migration file but is NOT used.** Spotify
   features are live-fetch-only. Columns: `id uuid PK (gen_random_uuid())`,
   `kind text`, `spotify_id text`, `name text`, `image_url text`,
   `metadata jsonb`, `fetched_at timestamptz`, `UNIQUE (kind, spotify_id)`. `kind`
   distinguishes row type (`'artist'` vs `'track'`); `metadata jsonb` is a
   catch-all.
+- **`art` table (`migrations_002.sql`, written 2026-09-16, not yet applied).**
+  `id uuid PK (gen_random_uuid())`, `public_id text NOT NULL UNIQUE`,
+  `url text NOT NULL`, `title text`, `year int`, `medium text`,
+  `width int NOT NULL`, `height int NOT NULL`, `metadata jsonb DEFAULT '{}'`,
+  `created_at timestamptz DEFAULT now()`. `public_id` is Cloudinary's id: `UNIQUE`
+  is what makes a re-upload idempotent (via `ON CONFLICT`) and a future delete
+  reachable. `width`/`height` are `NOT NULL` because the wall's masonry needs the
+  aspect ratio before the image loads; `year` is nullable, which is why the POST
+  validates it only when present.
+  (The file originally said `TIMESTAMPZ` — a typo Postgres would have rejected
+  outright. Fixed to `TIMESTAMPTZ`.)
 - General bias: one flexible table over several premature normalized ones, until a
-  real pattern forces a split. Planned art-upload feature gets a **separate**
-  table (own content vs cached third-party data), something like
-  `id, url, caption, uploaded_at, metadata jsonb`.
+  real pattern forces a split. The art table is **separate** from `spotify_cache`
+  on purpose: own content vs cached third-party data.
 
 ## Spotify integration — DONE (live-fetch, no persistence)
 - **OAuth bootstrap** (`auth.ts`, local-only via `ENABLE_SPOTIFY_LOGIN`):
@@ -311,6 +371,72 @@ still lives on its own page.
   **Known limitation**: Spotify top-items ranks by an undocumented "affinity"
   algorithm, not minutes played — can disagree with stats.fm. Real "most minutes"
   needs the Extended Streaming History export aggregated manually.
+
+## Art backend — WRITTEN 2026-09-16 (routes + auth verified; DB path unproven)
+
+Three routes on `artRouter`, mounted at `/api/art` in `index.ts`. **No `fetch` anywhere in
+these** — the server never talks to Cloudinary. It signs locally; the *browser* uploads.
+
+- **`GET /api/art`** — public (it's the gallery). Selects newest-first and returns
+  **`{ art: [...] }`** with **camelCase** keys (`publicId`, `createdAt` via SQL `AS "publicId"`).
+- **`GET /api/art/signature`** — behind `requireSecret`. Returns
+  `{ timestamp, signature, cloudName, apiKey, folder }`. Synchronous; no network call.
+- **`POST /api/art`** — behind `requireSecret`. Takes `{ publicId, url, width, height, title?,
+  year?, medium?, metadata? }`, validates, and inserts with **`ON CONFLICT (public_id) DO
+  UPDATE`** so re-posting the same image edits the row instead of tripping the unique index.
+  Returns `201` with the row.
+
+**The contract is camelCase, and it is the frontend's, not the backend's.** `frontend/src/.../art.ts`
+was written first and sends `publicId`/`url`. The backend was initially written with Cloudinary's
+own `public_id`/`secure_url` spellings and **would have 400'd every upload**; it was realigned to
+the frontend. If these ever drift again the symptom is a 400 saying the fields are missing on a
+request that visibly contains them.
+
+**`requireSecret`** (in `art.ts`): reads `x-art-secret`, 500s if `ART_SECRET` is unset (server
+misconfig, not a caller error), 401s if absent, then `timingSafeEqual` on Buffers — with a length
+check first, because `timingSafeEqual` **throws** on mismatched lengths rather than returning
+false. Constant-time so the secret can't be walked one character at a time. The length leak is
+accepted.
+
+**`src/backend/art/config.ts`** — calls `cloudinary.config()` once at import (global singleton
+state) with `secure: true`, and exports the configured `cloudinary`. Each env var goes through a
+`required()` helper that **throws at startup naming the missing var**. This replaced
+`` `${process.env.X}` `` template literals, which turn a missing var into the literal string
+`"undefined"` and surface much later as an unexplained Cloudinary 401. It also no longer exports
+the return of `config()`, which contains `api_secret`.
+
+**`src/backend/auth/cloudinary_auth.ts`** — `signuploadform()`: SHA-1s `{ timestamp, folder: 'art' }`
+via `cloudinary.utils.api_sign_request`, reading the secret straight from `process.env` (typed,
+because `config()` returns everything as optional). Returns the signed pair plus `cloudName`,
+`apiKey` and `folder` so the browser can build the upload URL — a deliberate departure from
+Cloudinary's docs, which hardcode those client-side. Sending them keeps `.env` the single source
+of truth.
+
+**The signing rule, which is the source of nearly every bug here:** sign *exactly* the params the
+browser will send (excluding `file`, `api_key`, `signature`, `resource_type`, `cloud_name`).
+Cloudinary re-hashes **what it receives** and compares. The docs' demo `eager:` transformation and
+`folder: 'signed_upload_demo_form'` were both copy-pasted in early and both had to go — sizes are
+done with URL transforms (`w_`,`q_auto`,`f_auto`, see `sized()`), not eager ones.
+
+**Don't cache the signature.** Considered and rejected 2026-09-16: it's a local SHA-1 over ~40
+bytes, no network call and no quota, so caching saves nothing measurable and reintroduces the
+expiry bug. Cloudinary rejects a `timestamp` more than ~1 hour off its clock — which is why an
+early version that signed once at module load was fatal (every upload would fail an hour after
+boot). Unlike the Spotify access token, where caching avoids a real HTTP round-trip. The frontend
+already fetches the signature when the file is picked, so the hour never matters.
+
+**Verified end-to-end against the real database** (2026-09-16, router on a spare port since 3000
+was occupied): signature route 401s with no header and with a wrong one, 200s with the right one
+and returns real hex; POST 401s without the header, 400s on a bad body; `GET` returns
+`{"art":[]}` when empty; a full insert returns 201 with the row; **re-posting the same `publicId`
+returned the same `uuid` with the updated title**, confirming `ON CONFLICT` rather than a
+duplicate-key error; a POST with no `year`/`title`/`medium` inserted nulls correctly. Test rows
+were deleted afterwards — the table is empty.
+
+**Not verified:** no real Cloudinary upload has been performed, so the `public_id`
+folder-prefix question is still open: with `folder: 'art'`, older accounts return a path-prefixed
+`public_id` (`art/abc`) while dynamic-folder accounts leave it bare and set `asset_folder`. Log
+the first upload response and see which shape arrives.
 
 ## Frontend — pages & components
 
@@ -418,6 +544,22 @@ still lives on its own page.
   or still loading) → the still's moment. Only the music candle's flicker is
   followed (`scene.candle.flicker`): the overlays it lights are all in the music
   corner; the work station's candle flickers on its own in the render.
+- **The "explore by pressing on things" note (2026-09-15).** User: "a little message
+  that appears at the top when you enter the studio", then mid-turn "it should be one
+  of those things that you can press an x on and it disappears". A `.studio-hint`
+  `role="status"` pill styled like "← back" (cream `#fbfbf8`, 3 px ink border, 3 px
+  drop shadow, `var(--sans)` 16 px), top-centre, with a `.studio-hint-close` × button
+  (an SVG cross, `aria-label="Close"`). State `hint: 'unseen' | 'showing' | 'closed'`
+  in `Studio`, adjusted during render like the walk: it shows the first time the
+  overview is *settled* (so landing on `/studio/laptop` and walking out still shows it),
+  stays until the × is pressed, and also closes for good once you set off towards an
+  item (it isn't brought back on returning). Not remembered between visits (no
+  storage). Drops in 12 px with a fade after 0.6 s (`studio-hint-in`; reduced motion:
+  fade only, `studio-hint-fade`). At ≤ 520 px wide it sits under the back button
+  (`top: 68px`), since centred it would overlap it. Checked in headless Chrome at
+  1440×900 (hint 579–861 px, back 16–111 px) and a 400×860 phone; clicking × unmounts
+  it. The first version faded out by itself after ~7 s; replaced by the × at the
+  user's request.
 - **`studioScene.ts`** — types for `assets/studio-scene.json` (written by the
   renderer) and the projection maths, identical to the shader's camera: a point
   lands at `(w/2 + k·(v·right)/z, h/2 − k·(v·up)/z)` with `k = coverScale ×
@@ -507,9 +649,13 @@ still lives on its own page.
     it) that fades and scales away after 0.4 s, and under it the `.home-screen`
     that wakes: the studio's own overview still as a dimmed wallpaper, a menu bar
     ("malachi's laptop", a live clock updated every 10 s), and desktop-style
-    shortcut tiles from the `SHORTCUTS` list — **GitHub only**
-    (`https://github.com/Malachitopp`), the user names the rest — each an `<a
-    target="_blank">` with the mark on a rounded tile and a label. **Sizing**: `--px`
+    shortcut tiles from the `SHORTCUTS` list (`{ name, href, mark, title? }`, `mark` an
+    SVG path on a 16×16 grid) — **GitHub** (`https://github.com/Malachitopp`, octicon
+    mark) and **Email** (added 2026-09-15: `mailto:malachi.topp@malachitopp.com`,
+    GitHub's `mail` octicon envelope as the mark, `title` = the address so hovering
+    shows it); the user names the rest. Each is an `<a>` with the mark on a rounded
+    tile and a label; `target="_blank"` except for `mailto:` links (a mail link only
+    launches the mail app, so a new tab would be left empty). **Sizing**: `--px`
     on the screen element = how many real px one of its px is at the close-up
     (from the projected width of the screen's top edge), and every size in the home
     screen is `calc(Npx / var(--px))`, so tiles are 84 real px and labels 12 real px
@@ -519,6 +665,56 @@ still lives on its own page.
   - *Hotspot*: from the overview a transparent `<button>` (`.studio-hotspot`, the
     class the music corner's uses too) over the projected box of `anchors.workstation`
     — crate, laptop, candle and papers — "Walk over to the laptop and my links".
+- **`Easel.tsx` + `art.ts`** (2026-09-16) — the art corner's live part, in its own
+  `.studio-overlay` plus one full-screen layer:
+  - *The canvas* (`CanvasFace`): mounted while settled at `/studio/easel` or with the wall up.
+    A 700×900 px element (1 px = 1 mm of the 0.70×0.90 m canvas) laid onto
+    `anchors.easelCanvas` with `planeTransform`, `--px` sized like the laptop's screen. The
+    render leaves the canvas blank; the first six paintings fade onto it 0.35 s after you arrive
+    (`easel-show`, the same trick as the laptop waking) as a **two-across contact sheet of
+    square-ish crops** — `grid-auto-rows: 1fr` + `object-fit: cover`, because `columns: 2` in a
+    fixed-height box fills the first column and leaves the second half empty (it looked broken
+    on a phone). Their true proportions are on the wall, where there's room. A label along the
+    bottom over a soft wash says "what I've painted" / "see them all"; the whole thing is an
+    `<a href="/studio/easel/paintings">` so ctrl-click still opens a tab.
+  - *The wall* (`Wall`): the canvas opened out to the screen — a `position: fixed` surface in
+    canvas colours (a warm off-white with a woven texture and an oak stretcher border round the
+    whole screen, `z-index` above the sticky bar or it would paint out the top edge), scrolled
+    down like a board of pins. Masonry is plain CSS `columns: 250px 5` with
+    `break-inside: avoid`; every pin carries the painting's own `width`/`height` as an
+    `aspect-ratio`, so nothing jumps as the images load. Each pin links to the full-size image.
+    **It grows out of the canvas rather than opening on top of it**: `canvasOnScreen(lens)` gives
+    the middle of the canvas on screen and how much of the screen's height it fills, which become
+    `transform-origin` and the starting `scale`. It is **mounted the whole time you stand at the
+    easel**, shrunk onto the canvas with `visibility: hidden; pointer-events: none` and
+    `visibility` in the `transition` list — so it grows shut as well as open (unmounting it on
+    close made it snap).
+  - *The URL is still the truth*: `/studio/easel/paintings` is the easel shot with the wall up,
+    so browser back closes the wall and `PATHS` maps both easel paths to the `easel` close-up.
+    Escape closes the add-form first, then the wall; `Studio`'s own Escape stands down while the
+    wall is up, and its "← back" is `hidden`.
+  - *Who can add one* (the user asked, 2026-09-16: "Do i have admin permissions or something? will
+    there be an add button only fo rme"). There is no account to log in to — the word in
+    `ART_SECRET` is the whole of it — so **a visitor is shown no way to add anything at all**,
+    not even a button that would turn them away. The way in is a faint `+` in the bar (22 %
+    opacity, full on hover/focus, a 30 px target so it works on a phone) or **shift+A**; either
+    opens `Unlock`, which checks the word with `verifySecret` (a `GET /api/art/signature` — only
+    the real secret gets a signature back) and on success remembers it in `sessionStorage` for the
+    tab and swaps the `+` for a real "add one" button. The empty-state line "press 'add one' to
+    hang the first" only shows once unlocked, for the same reason.
+  - *Adding one* (`AddPainting`): a file picker and title/year/medium — the word has already been
+    checked, so it is only sent, never asked for twice. `uploadPainting` asks
+    `/api/art/signature` for a signed Cloudinary upload, sends the file **straight to Cloudinary**
+    (so no image bytes go through the backend — no multipart parser, no `express.json` limit) and
+    then POSTs the row to `/api/art`. If `GET /api/art` ever 404s or fails, `useArt` reports
+    `unreachable` and the wall says "nothing up here yet" rather than erroring.
+  - *`art.ts`*: `useArt(enabled)` (skips the fetch until the paintings are wanted, so walking
+    round the studio doesn't ask for them), `sized(url, width)` which splices
+    `w_<n>,q_auto,f_auto` into a Cloudinary delivery URL so a wall of thumbnails doesn't pull
+    full-size photographs, `verifySecret`, and the secret helpers.
+  - *Hotspot*: from the overview, a `<button>` over the projected box of `anchors.artCorner`,
+    **never smaller than 44 px** either way — on a phone the corner is a narrow sliver at the
+    left edge of the frame and the raw projected box is too small to hit.
 - **`spotify.ts`** — `useNowPlaying()` and `useTopArtists(range)` (returns
   `{ artists, latest }`: the list for this range or null while loading, and
   whatever loaded last), shared by the studio and the Spotify page.
@@ -697,6 +893,22 @@ still lives on its own page.
     music, laptop }, overview, music, laptop, walks: { music: { seconds, fps,
     cameras[] }, laptop: {...} } }`. The old top-level `walk` and per-framing `walk[]`
     are gone (`delete scene.walk` in render.mjs drops it from a previous file).
+  - **The easel shot** (2026-09-16) stands **on the canvas's own normal**, 1.55 m out at eye
+    height (both framings share the position: `pos [-3.5459, 1.55, 10.7084]`), so the canvas is
+    face on — the site lays a scrolling wall of paintings straight onto it and an oblique canvas
+    would read badly for that. Landscape `target [-3.8231, 1.1075, 12.2261]` fov 54; portrait
+    `target [-3.8178, 1.3, 12.2508]` fov 58. Solved with a scratch `solve.mjs` (the narrowest lens
+    keeping the canvas plus a little easel inside every `cover` crop, aspect 1.4–2.1 / 0.44–0.6,
+    3 % margin), then **widened from that answer** so the crate of brushes and paint comes into the
+    bottom left; the aim is as low as it can go with the canvas still inside the 2.1-aspect
+    vertical crop (y 126–570 of 800 against a safe 95–705). Note that the canvas's size on screen
+    barely depends on the distance — fitting the lens to it cancels that out — so the distance is
+    chosen for how much of the corner comes in around it, not for how big the canvas is. Checked
+    by drawing the projected `easelCanvas` anchor on a peek: it lands exactly on the rendered
+    canvas, which is what the overlay needs. Walk 2.8 s (it is about as far from the door as the
+    laptop). **Its loop has no patches** — nothing in the corner moves and the letters, record,
+    flames and dog are all behind the camera — so only the candles' flicker in post changes
+    between frames, which makes it the cheapest loop in the set.
   - **Shots** (in `render.mjs`, metres): overview `pos [0, 1.6, 0]` looking down
     +z (fov 58 landscape / 80 portrait); music close-up landscape `pos [2.0, 1.6,
     6.0] → target [2.451, 1.05, 9.936]`, fov 30.47; portrait `pos [1.6, 1.6, 6.0] →
@@ -770,6 +982,24 @@ still lives on its own page.
     `+faststart`, no audio; CRF 20 for loops, 24 for walks. The grain seed is
     fixed, so the grain is identical in every frame: that is what keeps the loops
     small (only the patches change between frames).
+  - **Render times with the art corner (RX 6950 XT, 2026-09-16, everything, four shots):
+    ≈ 3 h per full run** (02:0x → 05:04). Stills 18–39 s (laptop longest). Loops: landscape
+    overview 1041 s, music 419, laptop 932, **easel 815**; portrait 747 / 355 / 269 / **174**.
+    Walks: landscape music 403 + 398, laptop 690 + 673, easel 616 + 617; portrait 278 + 281,
+    486 + 477, 520 + 481. Exposures: landscape 1.877 / 1.831 / 1.759 / **1.446**, portrait
+    1.996 / 1.941 / 1.842 / **1.464** (overview / music / laptop / easel).
+    Two things to know about the easel shot: its **exposure is much lower** than the others
+    because the big white canvas dominates the frame and auto-exposure answers to the median
+    pixel, so its walk ramps 1.88 → 1.45, a bigger swing than any other walk (it reads as the
+    eye adjusting, but it is the first place to look if a walk ever seems to darken oddly). And
+    its landscape loop is **815 s, not the ~200 s it should be** for a shot where nothing moves:
+    the sofa is in the right of that frame, so `dogBox` is a live patch and the dog's chest
+    re-renders 144 times. Tightening `dogBox` further, or clipping `screenRect` against the frame
+    (see Remaining work), would win that back.
+    **One whole run was thrown away** that day: the corner was modelled at z = 12.15, the render
+    was started, and the user then asked for the easel to come forward — which invalidated every
+    shot, since the corner is in all of them. Get the placement agreed from a `--preview` of
+    *both framings* before starting a full run.
   - **Render times with the work station and two candles (RX 6950 XT, evening of
     2026-09-15, everything): ≈ 2 h 30 min per full run** (four were started that
     evening: the first was black from the non-finite bug, the second had the clipped
@@ -847,6 +1077,86 @@ still lives on its own page.
   corners of the whole corner (for the hotspot), and `albumCover` / `albumShadow`
   (a 12" sleeve against the box's right side and the floor under it — computed in
   the page's JS from `BOX_HW` and the table's frame, not modelled in the shader).
+- **The art corner (added 2026-09-16).** The user asked for "a wooden easel with a blank canvas
+  on it, and then some more blank canvas scattered behind it, maybe have one infront of the sofa
+  thats lying flat on the floor, have some paint splatters around, on the floor, maybne some even
+  on the sofa too. I paint in oils … one of those wooden boxes that we have in the other
+  sections, have a pot with painty brushes and paints too", to the left of the sofa. Everything is
+  in the corner's frame at `ART_POS (-3.62, 0, 10.78)` yawed −10° (`ART_C/S`). **The first version
+  put it at z = 12.15, level with the tagline board, and the user said the easel itself had to come
+  forward** — "i want the actual easel to be like 25-50cm to the left and infront of the sofa, but
+  the mess can extend behind the sofa … dont have the easel pushed in the backgroudn" — so the easel
+  now stands in the open floor at the sofa's front-left corner with about 30 cm between them, and
+  the mess runs from in front of it back past the sofa instead. Where it stands is pinned between
+  two limits: the gap to the sofa wants it further left, and a phone's `cover` crop of the
+  **portrait** overview wants it further right and deeper (the canvas's left corner has to stay
+  inside 0.88 of the render's half-width — at z = 10.78 that is 3.97 m, and the corner sits at
+  3.97). At z = 10.52, which read best, a 0.44-aspect phone cut 20 % off the canvas. Check that
+  with the scratch snippet that projects `easelCanvas` through `portrait.overview` and compares it
+  with each aspect's crop. The whole corner is one `artCorner()` behind an outer slab, with inner
+  slabs round the easel and the canvases stacked just behind it, round the two further back by the
+  sofa, and round the one lying flat in front of it, so rays that only cross part of it don't pay
+  for all of it.
+  - **The easel** is a lyre easel. Its *mast* — two uprights 29 cm apart, two cross braces, the
+    ledge the canvas stands on with a lip along its front, and the clamp bar and pad over the
+    canvas's top edge — leans back 6° **as one piece**, so all of it is axis-aligned in the
+    mast's own frame (`easelLocal`, pivoting on the floor) and is just boxes there. The two front
+    feet lie flat on the floor and the rear leg props it from behind, so those are in the
+    corner's frame (a foot tipped 6° would float 3.6 cm off the floor at one end).
+  - **The canvases** are one table, `CANVAS_POS` (x, y, z of the middle of the bottom edge, and a
+    yaw) + `CANVAS_FORM` (lean back from upright, width, height), traced by `tiltedBox` and found
+    again by `canvasLocal`. In a canvas's own frame x runs across it, y up it and z into it from
+    the face — so **a lean of a right angle lays one face up on the floor**, which is how the one
+    in front of the sofa is done, with no special case. (A *negative* lean is one with its back to
+    the door, leaning away from you; its base y is 0, where a positive lean's is
+    `sin(lean)·CANVAS_T`.) Index 0 is the easel's (its place comes from the mast, not a guess:
+    mast (0, 0.745, −0.039) → corner (0, 0.745, 0.0391)); then three stacked in a loose rack just
+    behind it, each stepping back along its own normal, the third turned round so that one shows
+    its stretcher; a small one out to the left; one further back level with the sofa, stretcher
+    out; **one behind the sofa with only its top showing over the back** (0.95 m tall for that
+    reason — shorter and it disappears entirely); and the flat one. `canvasSurface()` draws the
+    face (gesso, a shade warm, uneven, darker where the cloth folds over the edge), the sides, the
+    back (a pale wooden bar round the border, slack cloth inside) — **and the paint on it**: every
+    canvas but the easel's takes a window of four of `CSPLAT`, chosen by its index so no two are
+    alike (the user, 2026-09-16: "Make some of the canvas have paint splatters on them, just make
+    it look messy"). The easel's is left clean; the site hangs the paintings on that one.
+  - **The crate** is a fourth plywood crate, 42 × 35 × 62 cm on end with a shelf, sharing the
+    corner's yaw (as the candle's crate shares its board's) at `ART_BOX (0.44, 0, -0.54)` — ahead
+    of the easel and on the sofa's side, where a painter's hand goes. It was on the easel's *left*
+    while the corner sat further back; once the easel came forward that put it off the left edge of
+    a phone's portrait crop, so it swapped sides. Its rear corner clears the sofa's front face by
+    10 cm (at −0.46 it was 1 cm, which is asking for trouble). On top: a tin (`M_POT`, paint run down it) with
+    nine brushes fanned out of it bristle-up (handle, ferrule, bristles still loaded with
+    whatever they last painted), six tubes of oil paint (`PAINT_TUBE`: a tin body, a band of the
+    colour it holds round the middle, a crimped tail, a cap) four on top and two on the shelf, and
+    a folded rag; two spare canvas boards stacked in the bottom. The **palette** stands on the
+    floor leaning against the crate's front (its top has to reach the crate's face or it looks
+    like it's falling over), with a blob of each colour round its top edge and what has been mixed
+    from them dragged across the middle.
+  - **The paint** is colour only, no geometry: `SPLAT` (x, z, radius, which colour) with the first
+    38 in the corner's frame for the floor — clustered where you stand, round the crate, back among
+    the canvases and on past the sofa — and the last 10 in the sofa's frame, plus `CSPLAT` for the
+    canvases, all through `paintOn`/`canvasPaint` in `surface()`. Dabs in the sofa's *footprint* are
+    wasted (the floor under it is never seen), so they stop short of it.
+    `splatMask` stretches each mark up to 3× along an angle of its own, breaks up its
+    edge with noise, runs a tapering drip off one end and throws three droplets clear — the first
+    version was plain circles and looked like confetti. The big ones (r > 6 cm) are old and
+    trodden, so they show the concrete through them; dust is mixed into every mark. **The floor is
+    the most-hit surface in the hall**, so `surface()` does one box test on the corner's local xz
+    before the dabs' loop.
+- **Colour, and oak (2026-09-16).** Asked whether the paint should stay greyscale the user said "I
+  want the colour to pop and stand out contrasting the grayscale. Everything that has colour should
+  have colour. The paint should have colour, if theres paint anywhere, on the floor, sofa, that
+  should have colour. the wood should also be wooden coloured. Oak, not gray." So `surface()` is
+  no longer "grey unless it's the candle": `M_WOOD` and `M_EASEL` are multiplied by `OAK`
+  (1, 0.74, 0.46) — **all four crates, not just the new one** — the canvases are warm primed
+  cotton, the brush handles varnished, and `M_PALETTE`, `M_PAINT_TUBE`, `M_BRISTLE`, `M_POT` and
+  `M_RAG` compute their colour directly (they never reach `albedo()`, which is only called by
+  `surface()`). Still grey by nature: the hall shell, the boards, the card letters, the concrete,
+  the fleece sofa, the dog. **Watch the knock-on**: `throughput *= a`, so warm crates bounce warm
+  light, and the candle beside the music board now reads noticeably more golden on its slate than
+  it did when the crate was grey. The levers if it's ever too much are `OAK` itself and
+  `grade.candle2`, not the geometry.
 - **The scene** (metres, overview camera at eye level 1.6m looking down the hall): 16m wide,
   55m long, 6.4m high box. 16 rows × 4 columns of fluorescent tubes hanging 0.8m
   below a near-black ceiling with deep cross beams; bare stud framing (studs every
@@ -1039,12 +1349,19 @@ still lives on its own page.
 ## Remaining work
 - **More shortcuts on the laptop's home screen** (user, 2026-09-15: "all my links
   and academic stuff … The first shortcut can just be my github and that's it for
-  now"). Each is an entry in `SHORTCUTS` in `Workstation.tsx` (name, href, an SVG
-  path for the tile); no render needed. The user names them. The user still decides
-  what else goes in the studio; don't populate it unprompted. A fourth item is now
-  a camera per framing + a `CLOSE_UPS` entry in `render.mjs`, a `CloseUp` in
-  `studioScene.ts`, its assets/`SHOTS` entry and `PATHS` route in `Studio.tsx`, and
-  an overlay component.
+  now"; later that day "add an email link for malachi.topp@malachitopp.com … as one of
+  the buttons"). Each is an entry in `SHORTCUTS` in `Workstation.tsx` (name, href, an
+  SVG path for the tile, optional title); no render needed. Two tiles fit side by side
+  with room for many more (they wrap from the top left). The user names them. The user still decides
+  what else goes in the studio; don't populate it unprompted. A **fifth** item (after music, the
+  laptop and the easel) is a camera per framing + a `CLOSE_UPS` entry in `render.mjs`, a `CloseUp`
+  in `studioScene.ts`, its assets/`SHOTS`/`ALT` entries and `PATHS` route in `Studio.tsx`, a case
+  in `App.tsx`'s switch, an anchor or two out of `info()` in the shader, and an overlay component.
+  The easel (2026-09-16) is the worked example to copy; note that its assets have to exist as
+  files before `Studio.tsx` imports them or Vite blanks the whole dev app (stand-ins from another
+  shot will do while the render runs), and that new `studio-scene.json` fields must be patched
+  into the committed file by hand before the code that reads them ships, because the renderer only
+  rewrites that file when a whole run finishes.
 - **MAYBE, low priority (user, 2026-09-15: "I don't believe it's important, it
   renders fine on my screen"): swipe to look around on phones.** When the render
   is wider than the screen, let the user swipe left/right to move the view "sort
@@ -1093,10 +1410,11 @@ still lives on its own page.
   the scene) — which matters for putting it *in* the studio, especially on phones;
   the API key stays server-side. **Open question put to the user: where it plays** —
   in the hologram, on something new like a TV, or in a pop-up from the album cover.
-- **Every studio asset on disk is from the final passes of 2026-09-15** (the
-  overview and music shots from the 21:0x full run, the laptop shots and all
-  portrait walks from the two partial passes after it; `studio-scene.json` written
-  21:53 with every exposure). Nothing is stale; the whole set is ready to commit.
+- **Every studio asset on disk is from the one full run of 2026-09-16** (02:0x → 05:04, all four
+  shots and both framings; `studio-scene.json` written 05:04 with every exposure). Nothing is
+  stale — but **none of it is committed yet**: the 2026-09-15 set in `8e90425` is what git still
+  has, so every JPEG/MP4 in `frontend/src/assets/` shows as modified. Commit the whole set with
+  the shader (see the drift note in config bugs).
 - **The laptop close-up's landscape loop is still the slow one (948 s):** `dogBox`
   was tightened to the dog's ribs, which cut its patch there from 353×1101 px to
   142×1135 (the box's corners still straddle the frame's left edge, and `screenRect`
@@ -1105,14 +1423,17 @@ still lives on its own page.
   would drop it to the portrait loop's ≈ 5 min. Worth doing before the next full
   render; check the overview loop afterwards for a seam where the chest meets the
   patch's edge.
-- **Commit the sofa, the dog and the work station** (the candle work was committed
-  by the user as `213ab43`; everything after is not): `tools/studio-render/index.html`
-  and `render.mjs`, every re-rendered `frontend/src/assets/studio-*` (the overview,
-  music and laptop stills and loops, the eight walks — the music ones renamed with
-  `git mv`, the laptop ones new — and `studio-scene.json`), `frontend/src/Studio.tsx`,
-  `Studio.css`, `Workstation.tsx`, `MusicCorner.tsx`, `studioScene.ts`, `App.tsx`
-  and this file. Commit the JPEGs/MP4s together with the shader (see the drift note
-  in config bugs). The `pictures/` folder stays out of git.
+- **Uncommitted (as of 2026-09-16):** the whole art corner — the shader's geometry and colour
+  (`tools/studio-render/index.html`), the easel shot (`render.mjs`), `Easel.tsx`, `art.ts`, the
+  easel wiring in `Studio.tsx` / `App.tsx` / `studioScene.ts`, the art styles in `Studio.css`,
+  the behind-the-camera guard in `MusicCorner.tsx`, **all the studio JPEGs/MP4s and
+  `studio-scene.json`** (the whole set was re-rendered, since the corner is in every shot), and
+  this file. Before that and also uncommitted: the "explore by pressing on things" note
+  (`Studio.tsx`, `Studio.css`) and the laptop's Email shortcut (`Workstation.tsx`). Everything
+  earlier — the sofa, the dog, the work station, its renders and the renamed music walks — was
+  committed by the user as `8e90425` ("created computer for github"); the candle before that as
+  `213ab43`. Keep committing JPEGs/MP4s together with the shader (see the drift note in config
+  bugs). The `pictures/` folder stays out of git.
 - **Backend review leftovers** (user is fixing these themselves, walking through
   together):
   - `getCurrent.ts`: guard `data.item === null` → return `{ is_playing: false }`.
@@ -1122,11 +1443,12 @@ still lives on its own page.
   - Clean the duplicate `SPOTIFY_REFRESH_TOKEN` line in `.env`.
   - Minor: drop redundant `pg-pool`; backend `tsconfig` has `declaration`/`jsx`
     options a server doesn't need.
-- **Art upload feature** (not started): write-auth check (secret vs env var), file
-  storage (recommendation: **Cloudinary** free tier over raw S3; Supabase Storage
-  also an option), and a DB table for metadata.
-- `spotify_cache` migration never applied — fine while unused. `migrations_002.sql`
-  is empty.
+- **The art backend — WRITTEN 2026-09-16, but never run against a database.** The user wrote
+  most of it (`config.ts`, `cloudinary_auth.ts`, the route skeletons) and asked me to finish and
+  fix the router at the end. It now type-checks and its auth/validation paths are verified; see
+  the "Art backend" section below for the full state and what's still unproven.
+- ~~Migrations never applied~~ — **done 2026-09-16**, see Local dev for the port-clash fix that
+  unblocked it. Still no migration runner/tracking table; migrations are run by hand.
 - Leftover Vite template assets are unused: `frontend/src/assets/hero.png`,
   `react.svg`, `vite.svg`, `frontend/public/icons.svg`, `frontend/README.md`
   (`public/favicon.svg` is still referenced by `index.html`).
@@ -1136,6 +1458,19 @@ still lives on its own page.
   an option for other pages.
 
 ## Local dev environment
+
+**Postgres is on host port 5433, not 5432** (changed 2026-09-16). A **native Windows Postgres
+install** (`postgres.exe`, PID 7884 at the time) is also listening on 5432 and wins the
+connection, so `DATABASE_URL` silently talked to that server instead of the container for as long
+as the project has existed — presenting as `password authentication failed for user "Malachi"`
+with credentials that were provably correct. Both `docker-compose.yaml` (`"5433:5432"`) and
+`.env`'s `DATABASE_URL` now use 5433. If that error ever returns, check
+`netstat -ano | grep :5432` for two listeners before touching any credentials.
+
+Also worth knowing: the container's password comes from `POSTGRES_PASSWORD` **only when the
+`pgdata` volume is first initialised**. Changing it in `.env` later has no effect on an existing
+volume — fix with `ALTER USER`, or delete the volume to re-init (destroys the data).
+
 - `docker-compose.yaml`: single `db` service, `postgres:17`, named volume
   `pgdata`, port `5432:5432`, `restart: unless-stopped`.
 - `.env` (gitignored) var names — never copy values into this doc. On the laptop
@@ -1190,7 +1525,12 @@ still lives on its own page.
   `document.getAnimations().forEach(a => { a.pause(); a.currentTime = T })` before
   each screenshot (`Page.captureScreenshot` is far too slow to catch frames live).
   First screenshot after a CSS edit can catch Vite mid-recompile — take a warm-up
-  shot.
+  shot. **Don't use Chrome's one-shot `--headless --screenshot` (with
+  `--virtual-time-budget`) to check a CSS-animated element**: on 2026-09-15 the
+  studio note was in the DOM (`--dump-dom` showed it) but never appeared in those
+  screenshots, even with `--run-all-compositor-stages-before-draw`; a DevTools-protocol
+  script that navigates, waits in real time and calls `Page.captureScreenshot`
+  showed it at once.
 - Checking the studio video (2026-09-15): `npm run build` in `frontend/`, serve
   `frontend/dist` from a tiny Node static server with an SPA fallback **and HTTP
   Range support** (video needs it), launch Chrome with
@@ -1246,15 +1586,19 @@ website-/                        (repo root)
 ├── src/
 │   ├── backend/
 │   │   ├── db.ts                (Pool from DATABASE_URL)
-│   │   ├── index.ts             (Express app; authRouter behind ENABLE_SPOTIFY_LOGIN, spotifyRouter at /api)
+│   │   ├── index.ts             (Express app; express.json(); authRouter behind ENABLE_SPOTIFY_LOGIN, spotifyRouter at /api, artRouter at /api/art)
+│   │   ├── art/
+│   │   │   ├── art.ts           (artRouter: GET /, GET /signature, POST /; requireSecret)
+│   │   │   └── config.ts        (cloudinary.config() once at import; required() env guard)
 │   │   ├── auth/
-│   │   │   └── auth.ts          (/login, /callback, get_accessToken)
+│   │   │   ├── auth.ts          (/login, /callback, get_accessToken)
+│   │   │   └── cloudinary_auth.ts (signuploadform(): signs { timestamp, folder:'art' })
 │   │   └── spotify/
 │   │       ├── getCurrent.ts    (spotifyRouter, GET /now-playing)
 │   │       └── getTop.ts        (adds GET /top/:type to spotifyRouter)
 │   └── migrations/
-│       ├── migrations_001.sql   (spotify_cache table, not yet applied)
-│       └── migrations_002.sql   (empty)
+│       ├── migrations_001.sql   (spotify_cache table, APPLIED 2026-09-16)
+│       └── migrations_002.sql   (art table, APPLIED 2026-09-16)
 ├── tools/
 │   └── studio-render/
 │       ├── index.html           (WebGL2 path tracer: hall, both blackboards, hanging name, music corner, the candle on its crate, the sofa with the dog asleep on it, the work station — crate of books, laptop, second candle, papers; colour film post with each candle's flicker; overlay anchors)
@@ -1273,9 +1617,11 @@ website-/                        (repo root)
 │       ├── App.css              (Spotify page: name, table, now-playing, SnoopyLedge styles)
 │       ├── Home.tsx / Home.css  (baby photo, thought bubble, zoom-in transition)
 │       ├── ThoughtCloud.tsx     ("click me!" cloud SVG)
-│       ├── Studio.tsx / Studio.css   (three shots, loops, walks between them via the overview, --flicker in step with the video; all studio + music corner + laptop screen styles incl. candlelight)
-│       ├── MusicCorner.tsx      (live overlay: top-artists board, notes, now-playing hologram, album cover, hotspot; --warm per lit thing)
-│       ├── Workstation.tsx      (live overlay: the laptop's home screen with its shortcuts (GitHub) and clock, the hotspot)
+│       ├── Studio.tsx / Studio.css   (four shots, loops, walks between them via the overview, --flicker in step with the video, the dismissible "explore by pressing on things" note; all studio + music corner + laptop screen + art corner styles incl. candlelight)
+│       ├── MusicCorner.tsx      (live overlay: top-artists board, notes, now-playing hologram, album cover, hotspot; --warm per lit thing; nothing drawn while the corner is behind the camera)
+│       ├── Workstation.tsx      (live overlay: the laptop's home screen with its shortcuts (GitHub, Email) and clock, the hotspot)
+│       ├── Easel.tsx            (live overlay: the paintings on the easel's canvas, the wall they grow into, the add-a-painting form, the hotspot)
+│       ├── art.ts              (useArt / sized / uploadPainting against /api/art — routes the user is writing)
 │       ├── studioScene.ts       (types for studio-scene.json; projection + matrix3d maths; candleFlicker / candleWarmth over both candles)
 │       ├── spotify.ts           (useNowPlaying / useTopArtists hooks)
 │       ├── SpotifyPage.tsx      (name + NowPlaying + TopArtists)
@@ -1300,7 +1646,12 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
 ## Working style notes for this project
 - **Backend: the user writes it.** Explain concepts, point to exact lines, give
   small example snippets, and review their code when they say they've done it —
-  don't edit backend files unprompted. (Early on a full static site was built
+  don't edit backend files unprompted. On 2026-09-16 I misread "Im writing up the
+  endpoints now" as a handoff and wrote the whole art router; they said "dont write
+  it up for me" and I backed it out. **When a message could be "here's my plan" or
+  "do this", assume the former on backend work.** They did later ask me to "finish
+  and fix the router" once they'd written most of it — that ask is explicit, wait
+  for it. (Early on a full static site was built
   unprompted; they asked to delete it and do it themselves.) They asked to "go
   through the backend together": a numbered review list, then one item at a time
   — concept → snippet → they implement → I check.
@@ -1406,6 +1757,15 @@ Reference photos (the baby HEIC, the bedroom JPEG) live one level up in
   catches — and ask the one decision that's theirs (e.g. where it would play); don't
   start building. A feature needing a new backend route falls under "the user writes
   the backend".
+- **Notices on the site should be closed by the visitor, not timed.** Asked for a
+  message at the top of the studio, a version that faded out after a few seconds got
+  "it should be one of those things that you can press an x on and it disappears".
+  Default to a dismissible × for hints/banners; say plainly any extra rule added on top
+  (here: it also closes once you walk up to something, and returns on each visit).
+- **Small UI additions arrive as one-liners** ("add an email link for … in the laptop as
+  one of the buttons"): match the existing pattern (the `SHORTCUTS` tile, the "← back"
+  pill), pick the sensible details (icon, `mailto:` without a new tab), verify in
+  headless Chrome on desktop and phone, and report what they'll see.
 - Still learning Claude Code's own controls (asked how to stop a running prompt —
   **Esc**; triggered `/claude-api` by accident). Answer those briefly and plainly.
 - Dictates via voice-to-text, so messages can be garbled — read charitably

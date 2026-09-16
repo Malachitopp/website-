@@ -8,6 +8,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "cloudinary": "^2.11.0",
     "express": "^5.2.1",
     "pg": "^8.23.0",
     "pg-pool": "^3.14.0"

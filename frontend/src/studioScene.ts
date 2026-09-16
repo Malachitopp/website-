@@ -10,7 +10,7 @@ export type Vec3 = [number, number, number]
 export type Camera = { pos: Vec3; right: Vec3; up: Vec3; fwd: Vec3; tanY: number }
 
 // The things in the studio you can walk up to
-export type CloseUp = 'music' | 'laptop'
+export type CloseUp = 'music' | 'laptop' | 'easel'
 
 // A walk from the overview to a close-up: one camera per frame of the walk-in video (the walk
 // out plays them backwards)
@@ -21,6 +21,7 @@ export type Framing = {
   overview: Camera
   music: Camera
   laptop: Camera
+  easel: Camera
   walks: Record<CloseUp, Walk>
 }
 
@@ -37,6 +38,8 @@ export type Scene = {
     dogHead: Vec3 // the top of the dog's head
     laptopScreen: [Vec3, Vec3, Vec3, Vec3] // the laptop's screen inside its bezel, same corner order as the board
     workstation: Vec3[] // corners of the box round the work station: the crate, the laptop and candle on it, the papers round it
+    easelCanvas: [Vec3, Vec3, Vec3, Vec3] // the blank canvas on the easel, same corner order: my paintings hang on it
+    artCorner: Vec3[] // corners of the box round the art corner: the easel, the spare canvases, the crate of paint
   }
   // The candles' light as the renderer does it, so the page can light its own things the same way
   candle: {

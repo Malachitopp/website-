@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import './Studio.css'
+import studioEaselLandscape from './assets/studio-easel-landscape.jpg'
+import studioEaselLandscapeLoop from './assets/studio-easel-landscape.mp4'
+import studioEaselPortrait from './assets/studio-easel-portrait.jpg'
+import studioEaselPortraitLoop from './assets/studio-easel-portrait.mp4'
+import studioEaselWalkInLandscape from './assets/studio-easel-walk-in-landscape.mp4'
+import studioEaselWalkInPortrait from './assets/studio-easel-walk-in-portrait.mp4'
+import studioEaselWalkOutLandscape from './assets/studio-easel-walk-out-landscape.mp4'
+import studioEaselWalkOutPortrait from './assets/studio-easel-walk-out-portrait.mp4'
 import studioLandscape from './assets/studio-landscape.jpg'
 import studioLandscapeLoop from './assets/studio-landscape.mp4'
 import studioLaptopLandscape from './assets/studio-laptop-landscape.jpg'
@@ -21,6 +29,7 @@ import studioMusicWalkOutLandscape from './assets/studio-music-walk-out-landscap
 import studioMusicWalkOutPortrait from './assets/studio-music-walk-out-portrait.mp4'
 import studioPortrait from './assets/studio-portrait.jpg'
 import studioPortraitLoop from './assets/studio-portrait.mp4'
+import Easel from './Easel'
 import MusicCorner from './MusicCorner'
 import Workstation from './Workstation'
 import { isModifiedClick, navigate, usePathname } from './router'
@@ -29,26 +38,38 @@ import { candleFlicker, scene, type CloseUp, type Lens } from './studioScene'
 type View = 'overview' | CloseUp
 type FramingName = 'landscape' | 'portrait'
 
-const CLOSE_UPS: CloseUp[] = ['music', 'laptop']
-const PATHS: Partial<Record<string, CloseUp>> = { '/studio/music': 'music', '/studio/laptop': 'laptop' }
+const CLOSE_UPS: CloseUp[] = ['music', 'laptop', 'easel']
+// which shot each path is standing at. /studio/easel/paintings is the easel shot too: the wall of
+// paintings is its canvas filled out to the screen, drawn over the same render.
+const PATHS: Partial<Record<string, CloseUp>> = {
+  '/studio/music': 'music',
+  '/studio/laptop': 'laptop',
+  '/studio/easel': 'easel',
+  '/studio/easel/paintings': 'easel',
+}
+const PAINTINGS = '/studio/easel/paintings'
 
 const SHOTS = {
   landscape: {
     overview: { still: studioLandscape, loop: studioLandscapeLoop },
     music: { still: studioMusicLandscape, loop: studioMusicLandscapeLoop },
     laptop: { still: studioLaptopLandscape, loop: studioLaptopLandscapeLoop },
+    easel: { still: studioEaselLandscape, loop: studioEaselLandscapeLoop },
     walks: {
       music: { in: studioMusicWalkInLandscape, out: studioMusicWalkOutLandscape },
       laptop: { in: studioLaptopWalkInLandscape, out: studioLaptopWalkOutLandscape },
+      easel: { in: studioEaselWalkInLandscape, out: studioEaselWalkOutLandscape },
     },
   },
   portrait: {
     overview: { still: studioPortrait, loop: studioPortraitLoop },
     music: { still: studioMusicPortrait, loop: studioMusicPortraitLoop },
     laptop: { still: studioLaptopPortrait, loop: studioLaptopPortraitLoop },
+    easel: { still: studioEaselPortrait, loop: studioEaselPortraitLoop },
     walks: {
       music: { in: studioMusicWalkInPortrait, out: studioMusicWalkOutPortrait },
       laptop: { in: studioLaptopWalkInPortrait, out: studioLaptopWalkOutPortrait },
+      easel: { in: studioEaselWalkInPortrait, out: studioEaselWalkOutPortrait },
     },
   },
 }
@@ -58,6 +79,7 @@ const ALT: Record<View, string> = {
     'An empty warehouse studio in black and white: rows of fluorescent tubes hanging from a dark beamed ceiling with my name hanging off them letter by letter, a blackboard mid-hall reading "A theoretical physics student", a record player on a wooden box in front of a second blackboard to its right with a candle glowing warm on a crate, and to its left my dog asleep on a small sofa beside a tall crate of books with an open laptop and a second candle on it, scribbled sheets of paper on the floor around it',
   music: 'Close up on the record player spinning on its wooden box, in front of a blackboard with my top artists pinned up on it, lit warm from the right by a Carby Musk candle burning in its navy glass on a little crate',
   laptop: 'Close up on an open laptop on a tall wooden crate of books, its screen showing the GitHub mark, a Carby Musk candle burning beside it and a sheet of scribbled diagrams under its front edge',
+  easel: 'Close up on a blank canvas on a wooden easel, spare canvases leaning behind it, an oak crate beside it with a tin of painty brushes and tubes of oil paint on top, and oil paint flicked over the concrete floor',
 }
 
 // Whether a media query matches right now; re-renders when that changes.
@@ -129,7 +151,7 @@ function Studio() {
   const framing: FramingName = useMediaQuery('(orientation: portrait)') ? 'portrait' : 'landscape'
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const rootRef = useRef<HTMLElement>(null)
-  const walkRefs = useRef<Record<CloseUp, HTMLVideoElement | null>>({ music: null, laptop: null })
+  const walkRefs = useRef<Record<CloseUp, HTMLVideoElement | null>>({ music: null, laptop: null, easel: null })
   const loopRef = useRef<HTMLVideoElement>(null)
   const walkedIn = useRef(false) // whether /studio is the history entry before this one
   const { width, height } = useSize(rootRef)
@@ -236,8 +258,11 @@ function Studio() {
     }
   }
 
+  // Escape leaves a close-up — unless the wall of paintings is up over the easel's canvas, where
+  // it closes that first (Easel listens for it)
+  const paintings = pathname === PAINTINGS
   useEffect(() => {
-    if (view === 'overview' || !settled) return
+    if (view === 'overview' || !settled || paintings) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') leave()
     }
@@ -325,9 +350,18 @@ function Studio() {
         })}
       <MusicCorner lens={lens} closeUp={closeUp('music')} focused={settled && view === 'music'} overview={overview} onEnter={() => enter('music')} />
       <Workstation lens={lens} closeUp={closeUp('laptop')} focused={settled && view === 'laptop'} overview={overview} onEnter={() => enter('laptop')} />
+      <Easel
+        lens={lens}
+        closeUp={closeUp('easel')}
+        focused={settled && view === 'easel'}
+        overview={overview}
+        paintings={paintings}
+        onEnter={() => enter('easel')}
+      />
       <a
         href={view === 'overview' ? '/' : '/studio'}
         className="studio-back"
+        hidden={paintings}
         onClick={(event) => {
           if (isModifiedClick(event)) return
           event.preventDefault()

@@ -7,6 +7,7 @@
 //                                             candles flicker and the dog breathes
 //   studio-music-<framing>.jpg / .mp4         the same for the close-up of the music corner
 //   studio-laptop-<framing>.jpg / .mp4        ...and of the laptop on the work station
+//   studio-easel-<framing>.jpg / .mp4         ...and of the blank canvas on the easel
 //   studio-<shot>-walk-in-<framing>.mp4       the camera walking from the overview to that close-up
 //   studio-<shot>-walk-out-<framing>.mp4      ...and back
 //   studio-scene.json                         every camera (frame by frame for the walks) and the
@@ -20,9 +21,9 @@
 //   node tools/studio-render/render.mjs --preview              small, fast stills, into this folder
 //   node tools/studio-render/render.mjs --preview --frames 24 --walk-fps 10   plus rough loops and walks
 //
-// --only overview,music,laptop,walk   render just those; walk means every walk, walk-music or
-//                                     walk-laptop just that one's; none renders nothing (the scene
-//                                     JSON is always rewritten)
+// --only overview,music,laptop,easel,walk   render just those; walk means every walk, or
+//                                     walk-music / walk-laptop / walk-easel just that one's; none
+//                                     renders nothing (the scene JSON is always rewritten)
 // --framing landscape|portrait  just one framing
 // --frames N                    video frames per loop (default 144: 24 fps for the 6 s loop)
 // --walk-fps N                  frames per second of the walks (default 30)
@@ -50,7 +51,7 @@ const option = (name) => {
 }
 const preview = flag('--preview')
 const stills = flag('--stills')
-const only = option('--only')?.split(',') ?? ['overview', 'music', 'laptop', 'walk']
+const only = option('--only')?.split(',') ?? ['overview', 'music', 'laptop', 'easel', 'walk']
 const loopFrames = option('--frames') ? Number(option('--frames')) : preview || stills ? 0 : 144
 const walkFps = option('--walk-fps') ? Number(option('--walk-fps')) : preview && !option('--frames') ? 0 : stills ? 0 : 30
 const chromePath = process.env.CHROME ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe'
@@ -60,7 +61,15 @@ const name = (file) => (preview ? `preview-${file}` : file)
 // ---- the shots ----
 // Metres, in the scene's frame: x across the hall (right is +), y up, z down the hall away
 // from the front wall. fov is vertical, in degrees. The overview is the view from the door;
-// music and laptop are the close-ups you walk up to.
+// music, laptop and easel are the close-ups you walk up to.
+//
+// The easel's camera stands on the canvas's own normal 1.55 m out at eye height, so the canvas is
+// face on — the site lays a scrolling wall of my paintings straight onto it, and an oblique canvas
+// would read badly for that. Its lens is then the narrowest that keeps the canvas (and a little of
+// the easel above and below it) inside what every likely screen shows under object-fit: cover,
+// widened a touch from that so the crate of brushes and paint comes into the bottom left. Solved
+// with a scratch solve.mjs like the laptop's; checked by drawing the projected easelCanvas anchor
+// on the render (it lands exactly on the rendered canvas, which is what the overlay needs).
 const EYE = 1.6
 const framings = {
   landscape: {
@@ -69,6 +78,7 @@ const framings = {
     overview: { pos: [0, EYE, 0], target: [0, EYE, 1], fov: 58 },
     music: { pos: [2.0, 1.6, 6.0], target: [2.451, 1.05, 9.936], fov: 30.47 },
     laptop: { pos: [-0.764, 1.4, 10.708], target: [-1.6966, 0.4231, 12.1826], fov: 30.75 },
+    easel: { pos: [-3.3659, 1.55, 9.3384], target: [-3.6431, 1.1075, 10.8561], fov: 54 },
   },
   portrait: {
     size: preview ? [390, 780] : [1170, 2340],
@@ -76,11 +86,12 @@ const framings = {
     overview: { pos: [0, EYE, 0], target: [0, EYE, 1], fov: 80 },
     music: { pos: [1.6, 1.6, 6.0], target: [2.67, 1.233, 9.837], fov: 51.53 },
     laptop: { pos: [-0.739, 1.56, 10.609], target: [-1.5424, 0.4413, 12.0592], fov: 52.23 },
+    easel: { pos: [-3.3659, 1.55, 9.3384], target: [-3.6378, 1.3, 10.8808], fov: 58 },
   },
 }
-// The close-ups, and how long the walk from the overview to each takes: the laptop is nearly
-// twice as far from the door as the music corner, so its walk gets a little longer.
-const CLOSE_UPS = { music: { seconds: 2 }, laptop: { seconds: 2.6 } }
+// The close-ups, and how long the walk from the overview to each takes: the laptop and the easel
+// are both about eleven metres from the door, the music corner about six.
+const CLOSE_UPS = { music: { seconds: 2 }, laptop: { seconds: 2.6 }, easel: { seconds: 2.8 } }
 const SPP = preview ? 64 : 1024
 // The walks are over in a couple of seconds and the camera never stops moving, so they get fewer
 // samples and two thirds of the resolution (the page scales them up): about a third of the download.
@@ -312,7 +323,13 @@ for (const key of chosen) {
     }
   }
 
-  scene[key] = { size: framing.size, exposure, overview: lookAt(framing.overview), music: lookAt(framing.music), laptop: lookAt(framing.laptop), walks }
+  scene[key] = {
+    size: framing.size,
+    exposure,
+    overview: lookAt(framing.overview),
+    ...Object.fromEntries(Object.keys(CLOSE_UPS).map((view) => [view, lookAt(framing[view])])),
+    walks,
+  }
 }
 delete scene.walk // the old shape of the file: one walk, its seconds and fps at the top level
 

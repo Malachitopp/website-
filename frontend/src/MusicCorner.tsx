@@ -70,9 +70,16 @@ function MusicCorner({ lens, closeUp, focused, overview, onEnter }: Props) {
   const record = project(lens, anchors.record)
   const cm = Math.max(record.pxPerMetre / 100, 2.4)
   const playing = nowPlaying?.is_playing && nowPlaying.track ? nowPlaying : null
+  // None of this is drawn while the corner is behind the camera: at the laptop and the easel your
+  // back is to it, and a point behind the lens projects to a mirrored place on screen — which used
+  // to leave the hologram, its beam and the notes stuck to the edge of those shots, labelling a
+  // record player nobody could see.
+  const boardMiddle = project(lens, quadPoint(anchors.musicBoard, 0.5, 0.5))
+  const behind = record.z <= 0
 
   return (
     <div className="studio-overlay">
+      {boardMiddle.z > 0 && (
       <div ref={boardRef} className="board-plane" style={{ transform: planeTransform(lens, anchors.musicBoard, BOARD_W, BOARD_H) }} inert={!focused}>
         <div
           className={`board-area${columns === 5 ? "" : " is-compact"}`}
@@ -114,12 +121,13 @@ function MusicCorner({ lens, closeUp, focused, overview, onEnter }: Props) {
           )}
         </div>
       </div>
+      )}
 
-      {playing?.albumArt && <AlbumCover key={playing.albumArt} lens={lens} art={playing.albumArt} track={playing.track!} artist={playing.artist} songUrl={playing.songUrl} focused={focused} />}
+      {!behind && playing?.albumArt && <AlbumCover key={playing.albumArt} lens={lens} art={playing.albumArt} track={playing.track!} artist={playing.artist} songUrl={playing.songUrl} focused={focused} />}
 
-      <Notes x={record.x} y={record.y} cm={cm} />
+      {!behind && <Notes x={record.x} y={record.y} cm={cm} />}
 
-      {playing && <Hologram lens={lens} cm={cm} track={playing.track!} artist={playing.artist} songUrl={playing.songUrl} focused={focused} onEnter={overview ? onEnter : undefined} />}
+      {!behind && playing && <Hologram lens={lens} cm={cm} track={playing.track!} artist={playing.artist} songUrl={playing.songUrl} focused={focused} onEnter={overview ? onEnter : undefined} />}
 
       {overview && <Hotspot lens={lens} onEnter={onEnter} />}
     </div>
