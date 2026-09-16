@@ -31,7 +31,7 @@ easel with a blank canvas, spare canvases leaning behind it and one lying face u
 floor in front of the sofa, an oak crate with a tin of painty brushes, tubes of oil paint
 and a palette, and oil paint flicked over the concrete and onto the sofa. Press it to walk
 up (`/studio/easel`); press the canvas and it opens out to fill the screen as a scrolling
-wall of the user's paintings (`/studio/easel/paintings`). **This is where the colour came
+wall of the user's work — shown as the **gallery** (`/studio/easel/gallery`). **This is where the colour came
 in**: the user asked for the paint and the wood to be in real colour against the grey hall
 (see *Colour* below), so every crate is oak now, not grey.
 On arriving in the studio a dismissible note at the top says "explore by pressing on
@@ -51,7 +51,7 @@ still lives on its own page.
   `popstate` plus a custom `app:navigate` event because `pushState` fires nothing),
   `navigate(to)`, and `isModifiedClick(event)` so ctrl/middle-clicks still open
   new tabs. `App.tsx` is a `switch` on the pathname: `/studio`, `/studio/music`,
-  `/studio/laptop`, `/studio/easel` and `/studio/easel/paintings` → `Studio` (the same element,
+  `/studio/laptop`, `/studio/easel` and `/studio/easel/gallery` → `Studio` (the same element,
   so it keeps its state and walks between them), `/spotify` → `SpotifyPage`, anything else →
   `Home`.
 - **Backend**: Node + TypeScript + Express 5, in `src/backend/`. Compiled with `tsc`
@@ -675,8 +675,11 @@ the first upload response and see which shape arrives.
     square-ish crops** — `grid-auto-rows: 1fr` + `object-fit: cover`, because `columns: 2` in a
     fixed-height box fills the first column and leaves the second half empty (it looked broken
     on a phone). Their true proportions are on the wall, where there's room. A label along the
-    bottom over a soft wash says "what I've painted" / "see them all"; the whole thing is an
-    `<a href="/studio/easel/paintings">` so ctrl-click still opens a tab.
+    bottom over a soft wash says "gallery"; the whole thing is an
+    `<a href="/studio/easel/gallery">` so ctrl-click still opens a tab. **Visible wording is
+    "gallery", not "paintings"** (the user, 2026-09-16: "just say gallery. I dont want to just upload
+    paintings and stuff") — the heading, labels and alt text say gallery, the add form's medium starts
+    empty and asks for "an image". Code names (`Painting`, `paintings`, the `art` table) were left as they were.
   - *The wall* (`Wall`): the canvas opened out to the screen — a `position: fixed` surface in
     canvas colours (a warm off-white with a woven texture and an oak stretcher border round the
     whole screen, `z-index` above the sticky bar or it would paint out the top edge), scrolled
@@ -689,7 +692,7 @@ the first upload response and see which shape arrives.
     easel**, shrunk onto the canvas with `visibility: hidden; pointer-events: none` and
     `visibility` in the `transition` list — so it grows shut as well as open (unmounting it on
     close made it snap).
-  - *The URL is still the truth*: `/studio/easel/paintings` is the easel shot with the wall up,
+  - *The URL is still the truth*: `/studio/easel/gallery` is the easel shot with the wall up,
     so browser back closes the wall and `PATHS` maps both easel paths to the `easel` close-up.
     Escape closes the add-form first, then the wall; `Studio`'s own Escape stands down while the
     wall is up, and its "← back" is `hidden`.
@@ -1556,23 +1559,53 @@ volume — fix with `ALTER USER`, or delete the volume to re-init (destroys the 
   reported a running render as exited) — rely on the background task's own exit
   notification.
 
-## Deployment plan (not started yet)
-- Target: something like Vercel/Netlify — frontend built via Vite, backend as
-  serverless functions.
-- **SPA fallback required**: `/studio` and `/spotify` are client-side routes, so
-  the host must serve `index.html` for them (rewrite rule). Vite's dev server
-  already does.
-- Env vars on the host: `SPOTIFY_REFRESH_TOKEN`, `CLIENT_ID`, `CLIENT_SECRET`
-  (plus DB URL once used). **Do not set `ENABLE_SPOTIFY_LOGIN`** — `/login` and
-  `/callback` stay local-only. The refresh token is tied to the Spotify app, not
-  the machine, so the locally-obtained token works on the host. Serverless can't
-  write to the project's `.env`, which is another reason the callback flow stays
-  local.
-- The Vite `/api` proxy is dev-only; production needs the API on the same origin
-  (host rewrites / functions) or CORS.
-- DNS: point malachitopp.com at the host once there's something worth deploying.
-- Hosted Postgres: Supabase (free project slots currently maxed) vs Neon (no
-  project cap; same connection-string experience since raw SQL is used).
+## Deployment — Vercel + Neon (config written 2026-09-16, not yet deployed)
+The user asked to go live before deciding what else to add ("Im not sure what i want to add to it
+yet"). One Vercel project (Hobby) from the GitHub repo `Malachitopp/website-`; pushes to `main`
+redeploy. Gallery items are added on the live site, not through git.
+- **`vercel.json`**: `framework: null`; `regions: ["lhr1"]` (London, next to the Neon database —
+  Hobby allows one region, and the default `iad1` would put every query across the Atlantic);
+  install root + `frontend/`; build `npm run build` (backend `tsc` → `dist/backend`) **then** the
+  frontend; output `frontend/dist`; rewrites `/api/(.*)` → `/api` and everything else →
+  `/index.html` (the SPA fallback for `/studio`, `/spotify`, …; real files such as the hashed
+  assets are served before rewrites run).
+- **`api/index.js`** just re-exports `dist/backend/app.js`. **It must stay plain JS importing the
+  compiled output.** Vercel's `@vercel/node` compiles a `.ts` function with the *project's*
+  `typescript` package (checked in the CLI source: `require.resolve('typescript', { paths: [project] })`),
+  and the root's TypeScript **7.0.2 has no JS API** (`transpileModule` is undefined), so a `.ts`
+  entry would break the build. It works because `vercel build` runs static/framework builds
+  before `@vercel/node` (`sortBuilders` in the CLI), so `dist/` exists when the function is traced.
+  Express sees the original path (`/api/art`), so the routes are unchanged.
+- **`src/backend/app.ts`** builds the app and exports it; **`index.ts`** only `listen(3000)`s for
+  `npm start`. Verified locally: `api/index.js` served through `http.createServer` with the real
+  `.env` gave 200 for now-playing, top artists and `GET /api/art`, 401 for the signature route and
+  POST without the secret, 404 for an unknown route.
+- **`.vercelignore`** keeps `.env`, `pictures/`, `tools/` and local builds out of any upload.
+- **Considered and not used:** Vercel *Services* (`services` in vercel.json: one project with a
+  frontend service and a backend service) — newer, permission-gated, unclear on Hobby; and
+  Express zero-config detection, which only looks at `src/index.ts`-style paths and would fight
+  the Vite frontend.
+- **Env vars on Vercel** (production): `CLIENT_ID`, `CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`,
+  `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `ART_SECRET`, and
+  `DATABASE_URL` = Neon's **pooled** URL. **Do not set `ENABLE_SPOTIFY_LOGIN`** (nor
+  `REDIRECT_URI` or the `POSTGRES_*` Docker vars): `/login` and `/callback` stay local-only, and
+  the refresh token is tied to the Spotify app, not the machine. `.env` defines
+  `SPOTIFY_REFRESH_TOKEN` **twice**, so copy values as `node --env-file=.env` resolves them (that
+  is what the working local server uses). `config.ts` throws at import if a Cloudinary var is
+  missing, which 500s **every** /api route, not just the art ones.
+- **Database:** Neon, created by the user directly (not through Vercel's Storage tab, so
+  `DATABASE_URL` has to be added to Vercel by hand). Project in `eu-west-2` (London), Postgres 18,
+  db `neondb`; the direct and pooled URLs are in a **comment** in `.env` (the live `DATABASE_URL`
+  there is still the local Docker one). Both connect from `pg` (checked 2026-09-16; the DB was
+  empty). `pg` warns that `sslmode=require` is treated as `verify-full` — use
+  `sslmode=verify-full` in the URL to say so and silence it. **The two migrations still have to
+  be run on Neon** (once, in order; there is no migration runner) — an attempt from this machine
+  was stopped by Claude Code's auto-mode permission check as a production change, so either the
+  user approves it or pastes both files into Neon's SQL Editor. Neon and the local Docker DB are
+  separate: things added locally don't appear live. Cloudinary's `art` folder is shared by both.
+- The Vite `/api` proxy is dev-only; production is same-origin through the rewrite, so no CORS.
+- DNS: malachitopp.com can be added in Vercel's Domains settings later; the `*.vercel.app`
+  address works meanwhile.
 
 ## Current file structure (as of last update)
 ```
@@ -1581,12 +1614,17 @@ website-/                        (repo root)
 ├── .gitignore                   (*.png, /pictures/, tools/studio-render/preview-*.{jpg,mp4}, …)
 ├── pictures/                    (gitignored: the user's three dog photos, reference for the dog on the sofa)
 ├── docker-compose.yaml
+├── vercel.json                  (install/build/output + /api and SPA rewrites; see Deployment)
+├── .vercelignore
+├── api/
+│   └── index.js                 (Vercel function: re-exports dist/backend/app.js — plain JS on purpose)
 ├── dist/                        (gitignored backend build output from `npm run build`)
 ├── package.json / package-lock.json / tsconfig.json     (backend; devDependency ffmpeg-static for tools/studio-render)
 ├── src/
 │   ├── backend/
 │   │   ├── db.ts                (Pool from DATABASE_URL)
-│   │   ├── index.ts             (Express app; express.json(); authRouter behind ENABLE_SPOTIFY_LOGIN, spotifyRouter at /api, artRouter at /api/art)
+│   │   ├── app.ts               (Express app, exported; express.json(); authRouter behind ENABLE_SPOTIFY_LOGIN, spotifyRouter at /api, artRouter at /api/art)
+│   │   ├── index.ts             (local only: app.listen(3000) for npm start)
 │   │   ├── art/
 │   │   │   ├── art.ts           (artRouter: GET /, GET /signature, POST /; requireSecret)
 │   │   │   └── config.ts        (cloudinary.config() once at import; required() env guard)

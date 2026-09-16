@@ -1,0 +1,10 @@
+# Never sent to Vercel: secrets, personal photos, the scene-render tooling (the site only uses the
+# renders it produced, which live in frontend/src/assets) and anything built or installed locally.
+.env
+.env.*
+pictures/
+tools/
+node_modules/
+dist/
+frontend/node_modules/
+frontend/dist/
