@@ -3,7 +3,7 @@ import { readSecret, rememberSecret, sized, uploadPainting, useArt, verifySecret
 import { isModifiedClick, navigate } from './router'
 import { planeTransform, project, scene, type Lens } from './studioScene'
 
-const PAINTINGS = '/studio/easel/paintings'
+const GALLERY = '/studio/easel/gallery'
 
 // The canvas on the easel is 700 × 900 mm, and its face is laid out at 1 px = 1 mm
 const CANVAS_W = 700
@@ -32,7 +32,7 @@ function Easel({ lens, closeUp, focused, overview, paintings, onEnter }: Props) 
     if (isModifiedClick(event)) return
     event.preventDefault()
     openedHere.current = true
-    navigate(PAINTINGS)
+    navigate(GALLERY)
   }
   const close = (event: MouseEvent) => {
     if (isModifiedClick(event)) return
@@ -80,7 +80,7 @@ function CanvasFace({
       className={`easel-canvas${open ? ' is-open' : ''}`}
       style={{ transform: planeTransform(lens, easelCanvas, CANVAS_W, CANVAS_H), '--px': px } as CSSProperties}
     >
-      <a className="easel-press" href={PAINTINGS} onClick={onOpen}>
+      <a className="easel-press" href={GALLERY} onClick={onOpen}>
         {shown.length > 0 && (
           <span className="easel-face-grid" aria-hidden="true">
             {shown.map((painting) => (
@@ -90,7 +90,7 @@ function CanvasFace({
             ))}
           </span>
         )}
-        <span className="easel-press-label">{shown.length > 0 ? 'see them all' : 'what I’ve painted'}</span>
+        <span className="easel-press-label">gallery</span>
       </a>
     </div>
   )
@@ -151,14 +151,14 @@ function Wall({ lens, art, open, onClose }: { lens: Lens; art: ArtState; open: b
       aria-hidden={!open}
     >
       <header className="art-bar">
-        <h2 className="art-title">paintings</h2>
+        <h2 className="art-title">gallery</h2>
         <div className="art-bar-buttons">
           {secret ? (
             <button type="button" className="art-button" onClick={() => setAdding((was) => !was)} aria-expanded={adding}>
               {adding ? 'never mind' : 'add one'}
             </button>
           ) : (
-            <button type="button" className="art-unlock" onClick={() => setAsking((was) => !was)} aria-label="Add a painting" aria-expanded={asking}>
+            <button type="button" className="art-unlock" onClick={() => setAsking((was) => !was)} aria-label="Add to the gallery" aria-expanded={asking}>
               +
             </button>
           )}
@@ -189,7 +189,7 @@ function Wall({ lens, art, open, onClose }: { lens: Lens; art: ArtState; open: b
           <p className="art-empty">
             nothing up here yet
             {status === 'unreachable' ? (
-              <span>the paintings are served by /api/art, which isn’t answering</span>
+              <span>the gallery is served by /api/art, which isn’t answering</span>
             ) : (
               secret && <span>press “add one” to hang the first</span>
             )}
@@ -209,7 +209,7 @@ function Pin({ painting }: { painting: Painting }) {
       <a href={url} target="_blank" rel="noreferrer">
         <img
           src={sized(url, 700)}
-          alt={title ? `${title}, a painting of mine` : 'A painting of mine'}
+          alt={title || 'From my gallery'}
           loading="lazy"
           style={{ aspectRatio: `${width} / ${height}` }}
         />
@@ -252,7 +252,7 @@ function Unlock({ onUnlocked }: { onUnlocked: (secret: string) => void }) {
         value={word}
         onChange={(event) => setWord(event.target.value)}
         placeholder="the word"
-        aria-label="The word that lets you add paintings"
+        aria-label="The word that lets you add to the gallery"
         autoFocus
       />
       <button type="submit" className="art-button" disabled={!word || busy}>
@@ -266,7 +266,7 @@ function Unlock({ onUnlocked }: { onUnlocked: (secret: string) => void }) {
 // Hanging a new one up: the file and what it is. The word has already been checked by Unlock, so it
 // is only sent, never asked for again this tab.
 function AddPainting({ secret, onAdded, onDone }: { secret: string; onAdded: () => void; onDone: () => void }) {
-  const [fields, setFields] = useState<NewPainting>({ title: '', year: '', medium: 'Oil on canvas' })
+  const [fields, setFields] = useState<NewPainting>({ title: '', year: '', medium: '' })
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
@@ -292,7 +292,7 @@ function AddPainting({ secret, onAdded, onDone }: { secret: string; onAdded: () 
     <form className="art-add" onSubmit={submit}>
       <label className="art-file">
         <input type="file" accept="image/*" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-        <span>{file ? file.name : 'choose a photograph'}</span>
+        <span>{file ? file.name : 'choose an image'}</span>
       </label>
       <input className="art-field" value={fields.title} onChange={set('title')} placeholder="title" aria-label="Title" />
       <input className="art-field art-field-short" value={fields.year} onChange={set('year')} placeholder="year" inputMode="numeric" aria-label="Year" />
@@ -331,7 +331,7 @@ function Hotspot({ lens, onEnter }: { lens: Lens; onEnter: () => void }) {
       type="button"
       className="studio-hotspot"
       style={{ left: (left + right) / 2 - width / 2, top: (top + bottom) / 2 - height / 2, width, height }}
-      aria-label="Walk over to the easel and my paintings"
+      aria-label="Walk over to the easel and my gallery"
       onClick={onEnter}
     />
   )

@@ -39,15 +39,15 @@ type View = 'overview' | CloseUp
 type FramingName = 'landscape' | 'portrait'
 
 const CLOSE_UPS: CloseUp[] = ['music', 'laptop', 'easel']
-// which shot each path is standing at. /studio/easel/paintings is the easel shot too: the wall of
-// paintings is its canvas filled out to the screen, drawn over the same render.
+// which shot each path is standing at. /studio/easel/gallery is the easel shot too: the gallery
+// wall is its canvas filled out to the screen, drawn over the same render.
 const PATHS: Partial<Record<string, CloseUp>> = {
   '/studio/music': 'music',
   '/studio/laptop': 'laptop',
   '/studio/easel': 'easel',
-  '/studio/easel/paintings': 'easel',
+  '/studio/easel/gallery': 'easel',
 }
-const PAINTINGS = '/studio/easel/paintings'
+const GALLERY = '/studio/easel/gallery'
 
 const SHOTS = {
   landscape: {
@@ -258,9 +258,9 @@ function Studio() {
     }
   }
 
-  // Escape leaves a close-up — unless the wall of paintings is up over the easel's canvas, where
+  // Escape leaves a close-up — unless the gallery wall is up over the easel's canvas, where
   // it closes that first (Easel listens for it)
-  const paintings = pathname === PAINTINGS
+  const paintings = pathname === GALLERY
   useEffect(() => {
     if (view === 'overview' || !settled || paintings) return
     const onKey = (event: KeyboardEvent) => {
