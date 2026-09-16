@@ -1559,10 +1559,26 @@ volume — fix with `ALTER USER`, or delete the volume to re-init (destroys the 
   reported a running render as exited) — rely on the background task's own exit
   notification.
 
-## Deployment — Vercel + Neon (config written 2026-09-16, not yet deployed)
+## Deployment — Vercel + Neon — LIVE 2026-09-16 at https://malachi-topp.vercel.app
 The user asked to go live before deciding what else to add ("Im not sure what i want to add to it
-yet"). One Vercel project (Hobby) from the GitHub repo `Malachitopp/website-`; pushes to `main`
-redeploy. Gallery items are added on the live site, not through git.
+yet"). One Vercel project, **`malachi-topp`** (Hobby, scope `ps-2ddc`, account `malachitopp-5255`;
+the user picked the name), for the GitHub repo `Malachitopp/website-` (public). Gallery items are
+added on the live site, not through git.
+- **Status (2026-09-16):** first production deploy made from this machine with
+  `vercel deploy --prod`. **Git is not connected yet** — `vercel git connect` failed because the
+  Vercel GitHub app had no access to the repo; the user was asked to connect it in the dashboard
+  (Settings → Git). Until then a push to `main` does **not** redeploy. Checked live: `/`,
+  `/studio`, `/studio/easel/gallery`, `/spotify` → 200 HTML (SPA fallback works); now-playing and
+  top artists → 200 with real data; `GET /api/art` → `{"art":[]}` from Neon; signature and POST →
+  401 without / with a wrong secret, 200 with the real one (cloudName/apiKey match `.env`);
+  unknown `/api` route → 404; the function runs in `lhr1`. **Not yet tested:** a real Cloudinary
+  upload (the first one through the live site is the test).
+- Env vars were added for **production and preview** and Vercel stored them as **sensitive**:
+  `vercel env pull` returns `"[SENSITIVE]"`, so they can't be read back — to change one, re-add it
+  with `vercel env add NAME production --force` (value on stdin) and redeploy.
+- `vercel link` writes `.vercel/` (now in `.gitignore`) and a `.env.local` holding a
+  `VERCEL_OIDC_TOKEN` (covered by `.env.*`; nothing reads it). It also appended `.env*` to
+  `.gitignore`, which would have cancelled `!.env.example`; that line was removed.
 - **`vercel.json`**: `framework: null`; `regions: ["lhr1"]` (London, next to the Neon database —
   Hobby allows one region, and the default `iad1` would put every query across the Atlantic);
   install root + `frontend/`; build `npm run build` (backend `tsc` → `dist/backend`) **then** the
