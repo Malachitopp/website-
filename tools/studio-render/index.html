@@ -376,7 +376,9 @@
         M_BOOK = 30, M_MATCHBOX = 31, M_MATCH = 32, M_SOFA = 33, M_PILLOW = 34, M_DOG = 35, M_NOSE = 36,
         M_LAPTOP = 37, M_SCREEN = 38, M_DBOOK = 39, M_PAPER = 40, M_PENCIL = 41,
         M_EASEL = 42, M_CANVAS = 43, M_PALETTE = 44, M_BRUSH = 45, M_BRISTLE = 46,
-        M_PAINT_TUBE = 47, M_POT = 48, M_RAG = 49, M_RUG = 50;
+        M_PAINT_TUBE = 47, M_POT = 48, M_RAG = 49, M_RUG = 50,
+        M_BAY = 51, M_BAY_BACK = 52, M_LED = 53, M_DOWNLIGHT = 54, M_PANE = 55, M_SUIT = 56, M_ARMOUR = 57,
+        M_SUIT_GLOW = 58, M_CAPE = 59, M_VINE = 60;
 
       struct Hit { float t; vec3 n; int m; };
 
@@ -1132,6 +1134,427 @@
 
       const float PIPE_Z0 = 9.3, PIPE_Z1 = 21.6, PIPE_Z2 = 33.1;
 
+      // ---- the armour stands ----
+      // Three suits on stands in a row against the left wall, down the hall past the sofa. The row's
+      // own frame: x along the wall (+ towards the door), y up, z out of the wall into the hall.
+      // DESIGN 0 is a row of open alcoves (lit plinth, pillars with light strips, a lit panel in the
+      // header over each suit); 1 is three glass-fronted steel cases.
+      const int DESIGN = 2;
+      const float ROW_Z = 16.6; // the middle of the row, down the hall
+      const float SUIT_BASE = 0.15, SUIT_OUT = 0.45; // where each suit stands: on the plinth, out from the wall
+      const float BAY_LE = 7.0, STRIP_LE = 2.5, SLAT_LE = 1.2, VISOR_LE = 8.0;
+      const float PANEL_HW = 0.35, PANEL_Z0 = 0.3, PANEL_Z1 = 0.6; // the light panel in each bay's header
+      const int SUIT_IRON = 0, SUIT_MILES = 1, SUIT_BAT = 2;
+      bool skipPanes = false; // shadow rays go through the glass
+
+      vec3 rowLocal(vec3 p) { return vec3(ROW_Z - p.z, p.y, p.x + HALF_W); }
+      vec3 rowLocalDir(vec3 d) { return vec3(-d.z, d.y, d.x); }
+      vec3 rowWorldDir(vec3 n) { return vec3(n.z, n.y, -n.x); }
+      vec3 rowWorld(vec3 q) { return vec3(q.z - HALF_W, q.y, ROW_Z - q.x); }
+      float bayPitch() { return DESIGN == 0 ? 1.3 : 1.1; } // DESIGN 2 too
+      int bayOf(float x) { return int(clamp(floor(x / bayPitch() + 1.5), 0.0, 2.0)); }
+      float bayCentre(int i) { return float(i - 1) * bayPitch(); }
+      float headerY() { return DESIGN == 0 ? 2.45 : DESIGN == 1 ? 2.12 : 2.24; }
+      int suitKind(int i) { return i == 2 ? SUIT_IRON : i == 1 ? SUIT_MILES : SUIT_BAT; } // Iron Man nearest the door
+
+      void alcoves(vec3 o, vec3 d, inout Hit l) {
+        box(o, d, vec3(-2.1, 0.0, 0.0), vec3(2.1, 2.75, 0.04), M_BAY_BACK, l);
+        box(o, d, vec3(-2.1, 0.0, 0.04), vec3(2.1, 0.15, 1.0), M_BAY, l);
+        box(o, d, vec3(-2.1, 0.118, 1.0), vec3(2.1, 0.132, 1.006), M_LED, l); // the plinth's lit lip
+        for (int i = 0; i < 4; i++) {
+          float c = (float(i) - 1.5) * 1.3;
+          box(o, d, vec3(c - 0.15, 0.15, 0.04), vec3(c + 0.15, 2.45, 0.8), M_BAY, l);
+          box(o, d, vec3(c - 0.13, 0.3, 0.8), vec3(c - 0.11, 2.35, 0.806), M_LED, l);
+          box(o, d, vec3(c + 0.11, 0.3, 0.8), vec3(c + 0.13, 2.35, 0.806), M_LED, l);
+        }
+        box(o, d, vec3(-2.1, 2.45, 0.04), vec3(2.1, 2.75, 0.8), M_BAY, l);
+        for (int i = 0; i < 3; i++) {
+          float c = bayCentre(i);
+          box(o, d, vec3(c - PANEL_HW, 2.444, PANEL_Z0), vec3(c + PANEL_HW, 2.45, PANEL_Z1), M_DOWNLIGHT, l);
+        }
+      }
+
+      // DESIGN 2: all-glass cases, a thin steel frame round a steel base and lid
+      void glassCases(vec3 o, vec3 d, inout Hit l) {
+        for (int i = 0; i < 3; i++) {
+          float c = bayCentre(i);
+          box(o, d, vec3(c - 0.5, 0.0, 0.0), vec3(c + 0.5, 2.3, 0.05), M_BAY_BACK, l);
+          for (int k = 0; k < 2; k++) {
+            float x = k == 0 ? c - 0.5 : c + 0.47;
+            box(o, d, vec3(x, 0.0, 0.82), vec3(x + 0.03, 2.3, 0.85), M_BAY, l);
+          }
+          box(o, d, vec3(c - 0.5, 2.24, 0.05), vec3(c + 0.5, 2.3, 0.85), M_BAY, l);
+          box(o, d, vec3(c - 0.5, 0.0, 0.05), vec3(c + 0.5, 0.03, 0.85), M_BAY, l);
+          box(o, d, vec3(c - 0.35, 0.03, 0.1), vec3(c + 0.35, 0.075, 0.8), M_BAY, l);
+          box(o, d, vec3(c - 0.338, 0.075, 0.112), vec3(c + 0.338, 0.085, 0.788), M_LED, l);
+          box(o, d, vec3(c - 0.28, 0.085, 0.17), vec3(c + 0.28, 0.15, 0.73), M_BAY, l);
+          box(o, d, vec3(c - PANEL_HW, 2.234, PANEL_Z0), vec3(c + PANEL_HW, 2.24, PANEL_Z1), M_DOWNLIGHT, l);
+          if (!skipPanes) {
+            box(o, d, vec3(c - 0.47, 0.03, 0.835), vec3(c + 0.47, 2.24, 0.845), M_PANE, l);
+            box(o, d, vec3(c - 0.495, 0.03, 0.05), vec3(c - 0.485, 2.24, 0.82), M_PANE, l);
+            box(o, d, vec3(c + 0.485, 0.03, 0.05), vec3(c + 0.495, 2.24, 0.82), M_PANE, l);
+          }
+        }
+      }
+
+      void cases(vec3 o, vec3 d, inout Hit l) {
+        for (int i = 0; i < 3; i++) {
+          float c = bayCentre(i);
+          box(o, d, vec3(c - 0.5, 0.0, 0.0), vec3(c + 0.5, 2.3, 0.05), M_BAY_BACK, l);
+          box(o, d, vec3(c - 0.5, 0.0, 0.8), vec3(c - 0.45, 2.3, 0.85), M_BAY, l);
+          box(o, d, vec3(c + 0.45, 0.0, 0.8), vec3(c + 0.5, 2.3, 0.85), M_BAY, l);
+          box(o, d, vec3(c - 0.5, 0.0, 0.05), vec3(c - 0.49, 2.3, 0.8), M_BAY, l);
+          box(o, d, vec3(c + 0.49, 0.0, 0.05), vec3(c + 0.5, 2.3, 0.8), M_BAY, l);
+          box(o, d, vec3(c - 0.5, 2.12, 0.05), vec3(c + 0.5, 2.3, 0.85), M_BAY, l);
+          box(o, d, vec3(c - 0.5, 0.0, 0.05), vec3(c + 0.5, 0.03, 0.85), M_BAY, l);
+          box(o, d, vec3(c - 0.35, 0.03, 0.1), vec3(c + 0.35, 0.075, 0.8), M_BAY, l);
+          box(o, d, vec3(c - 0.338, 0.075, 0.112), vec3(c + 0.338, 0.085, 0.788), M_LED, l);
+          box(o, d, vec3(c - 0.28, 0.085, 0.17), vec3(c + 0.28, 0.15, 0.73), M_BAY, l);
+          box(o, d, vec3(c - 0.482, 0.17, 0.85), vec3(c - 0.468, 2.05, 0.856), M_LED, l);
+          box(o, d, vec3(c + 0.468, 0.17, 0.85), vec3(c + 0.482, 2.05, 0.856), M_LED, l);
+          box(o, d, vec3(c - PANEL_HW, 2.114, PANEL_Z0), vec3(c + PANEL_HW, 2.12, PANEL_Z1), M_DOWNLIGHT, l);
+          if (!skipPanes) box(o, d, vec3(c - 0.45, 0.03, 0.84), vec3(c + 0.45, 2.12, 0.85), M_PANE, l);
+        }
+      }
+
+      // ---- the suits ----
+      // Every suit is a signed distance field on a faceless 1.8 m mannequin: origin between its feet,
+      // x across, y up, z the way it faces. Plates are hard-unioned over the mannequin so their edges
+      // show; joints are the mannequin showing through in dark grey.
+      float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2) {
+        vec3 ba = b - a; float l2 = dot(ba, ba), rr = r1 - r2, a2 = l2 - rr * rr, il2 = 1.0 / l2;
+        vec3 pa = p - a; float y = dot(pa, ba), z = y - l2;
+        vec3 w = pa * l2 - ba * y; float x2 = dot(w, w), y2 = y * y * l2, z2 = z * z * l2;
+        float k = sign(rr) * rr * rr * x2;
+        if (sign(z) * a2 * z2 > k) return sqrt(x2 + z2) * il2 - r2;
+        if (sign(y) * a2 * y2 < k) return sqrt(x2 + y2) * il2 - r1;
+        return (sqrt(x2 * a2 * il2) + y * rr) * il2 - r1;
+      }
+      float sdCylZ(vec3 p, vec2 c, float r, float z0, float z1) { return max(length(p.xy - c) - r, max(z0 - p.z, p.z - z1)); }
+
+      // the mannequin; bulk pads it out (the undersuit under armour)
+      float mannequin(vec3 p, float bulk) {
+        vec3 q = vec3(abs(p.x), p.y, p.z);
+        vec3 ql = vec3(q.x, p.y, p.z + 0.02 * sign(p.x)); // one foot a little forward: a relaxed stance
+        float head = sdEllipsoid(p - vec3(0.0, 1.66, 0.01), vec3(0.079, 0.106, 0.094) + 0.6 * bulk);
+        float neck = sdCapsule(p, vec3(0.0, 1.46, -0.01), vec3(0.0, 1.575, 0.0), 0.048 + 0.5 * bulk);
+        float trap = sdCapsule(q, vec3(0.0, 1.49, -0.025), vec3(0.165, 1.415, -0.015), 0.035 + bulk);
+        float chest = sdEllipsoid(p - vec3(0.0, 1.31, -0.005), vec3(0.165, 0.165, 0.1) + bulk);
+        float pec = sdEllipsoid(q - vec3(0.075, 1.335, 0.065), vec3(0.078, 0.052, 0.038) + 0.5 * bulk);
+        float belly = sdEllipsoid(p - vec3(0.0, 1.09, 0.0), vec3(0.12, 0.14, 0.083) + bulk);
+        float hips = sdEllipsoid(p - vec3(0.0, 0.925, 0.0), vec3(0.15, 0.1, 0.092) + bulk);
+        float torso = smin(smin(smin(smin(chest, pec, 0.03), belly, 0.05), hips, 0.05), smin(neck, trap, 0.03), 0.03);
+        float delt = sdEllipsoid(q - vec3(0.192, 1.42, 0.0), vec3(0.068, 0.062, 0.066) + bulk);
+        float arm = sdRoundCone(q, vec3(0.2, 1.40, 0.0), vec3(0.235, 1.125, -0.02), 0.046 + bulk, 0.04 + bulk);
+        float elbow = sdEllipsoid(q - vec3(0.235, 1.125, -0.02), vec3(0.042, 0.048, 0.042) + bulk);
+        float fore = sdRoundCone(q, vec3(0.235, 1.125, -0.02), vec3(0.258, 0.85, 0.04), 0.042 + bulk, 0.031 + bulk);
+        float hand = sdRoundBox(q - vec3(0.262, 0.765, 0.05), vec3(0.018, 0.058, 0.032) + 0.5 * bulk, 0.014);
+        float arms = smin(smin(smin(delt, arm, 0.02), elbow, 0.015), smin(fore, hand, 0.02), 0.015);
+        float thigh = sdRoundCone(ql, vec3(0.09, 0.9, 0.0), vec3(0.105, 0.52, 0.01), 0.08 + bulk, 0.058 + bulk);
+        float knee = sdEllipsoid(ql - vec3(0.105, 0.5, 0.048), vec3(0.042, 0.048, 0.03) + 0.5 * bulk);
+        float calf = sdRoundCone(ql, vec3(0.105, 0.5, 0.0), vec3(0.11, 0.1, -0.005), 0.052 + bulk, 0.036 + bulk);
+        float bulge = sdEllipsoid(ql - vec3(0.105, 0.4, -0.035), vec3(0.046, 0.095, 0.042) + bulk);
+        float foot = sdRoundBox(ql - vec3(0.112, 0.035, 0.065), vec3(0.04 + bulk, 0.025 + 0.5 * bulk, 0.11 + bulk), 0.02);
+        float legs = smin(smin(smin(thigh, knee, 0.02), smin(calf, bulge, 0.03), 0.025), foot, 0.025);
+        return smin(smin(smin(torso, arms, 0.02), legs, 0.03), head, 0.015);
+      }
+
+      // Iron Man's plates: helmet with its jaw, chest, abdomen, hips, pauldrons, arm plates, gauntlets,
+      // thigh plates, knee guards, shin guards flaring into the calf, boots, the back unit
+      float ironPlates(vec3 p) {
+        vec3 q = vec3(abs(p.x), p.y, p.z);
+        vec3 ql = vec3(q.x, p.y, p.z + 0.02 * sign(p.x));
+        float d = sdEllipsoid(p - vec3(0.0, 1.66, 0.008), vec3(0.086, 0.112, 0.098));
+        d = min(d, sdRoundBox(p - vec3(0.0, 1.578, 0.035), vec3(0.052, 0.022, 0.058), 0.022));
+        d = min(d, sdEllipsoid(p - vec3(0.0, 1.33, 0.025), vec3(0.19, 0.16, 0.117)));
+        d = min(d, sdEllipsoid(p - vec3(0.0, 1.10, 0.012), vec3(0.135, 0.15, 0.095)));
+        d = min(d, sdEllipsoid(p - vec3(0.0, 0.925, 0.01), vec3(0.165, 0.105, 0.105)));
+        d = min(d, sdRoundBox(p - vec3(0.0, 1.29, -0.105), vec3(0.11, 0.13, 0.035), 0.03));
+        d = min(d, sdEllipsoid(q - vec3(0.198, 1.44, 0.0), vec3(0.088, 0.068, 0.095)));
+        d = min(d, sdRoundCone(q, vec3(0.21, 1.37, -0.005), vec3(0.235, 1.19, -0.02), 0.06, 0.054));
+        d = min(d, sdRoundCone(q, vec3(0.238, 1.07, -0.015), vec3(0.258, 0.86, 0.04), 0.058, 0.05));
+        d = min(d, sdRoundBox(q - vec3(0.262, 0.765, 0.05), vec3(0.026, 0.06, 0.04), 0.018));
+        d = min(d, sdRoundCone(ql, vec3(0.09, 0.86, 0.0), vec3(0.105, 0.58, 0.01), 0.09, 0.07));
+        d = min(d, sdEllipsoid(ql - vec3(0.105, 0.5, 0.058), vec3(0.052, 0.052, 0.035)));
+        d = min(d, sdRoundCone(ql, vec3(0.105, 0.44, -0.01), vec3(0.11, 0.13, -0.01), 0.074, 0.058));
+        d = min(d, sdRoundBox(ql - vec3(0.112, 0.045, 0.07), vec3(0.044, 0.03, 0.115), 0.02));
+        return d;
+      }
+      // the arc reactor is a round well in the chest plate; its floor glows
+      float reactorWell(vec3 p) { return sdCylZ(p, vec2(0.0, 1.33), 0.036, 0.118, 0.3); }
+
+      // Batman's cape: hung from the shoulders, widening as it falls, with vertical folds that deepen
+      // towards a scalloped hem. Scaled down because the folds make it steep.
+      float suitCape(vec3 p) {
+        float top = 1.48, bot = 0.30 + 0.035 * sin(p.x * 55.0);
+        float s = clamp((top - p.y) / (top - bot), 0.0, 1.0);
+        float halfW = mix(0.24, 0.42, s);
+        float folds = (0.028 * sin(p.x * 29.0 + 0.7) + 0.014 * sin(p.x * 61.0 - 1.9)) * (0.15 + 0.85 * s) + 0.006 * s * sin(p.y * 11.0 + p.x * 7.0);
+        float zc = -0.10 - 0.14 * s + 0.6 * p.x * p.x * (1.0 - 0.5 * s) + folds;
+        return 0.4 * max(abs(p.z - zc) - 0.007, max(abs(p.x) - halfW, max(p.y - top, bot - p.y)));
+      }
+      // the cowl's ears, the belt with its pouches, the gauntlets with their fins, the boots
+      float batExtras(vec3 p) {
+        vec3 q = vec3(abs(p.x), p.y, p.z);
+        vec3 ql = vec3(q.x, p.y, p.z + 0.02 * sign(p.x));
+        float d = sdRoundCone(q, vec3(0.046, 1.735, -0.008), vec3(0.06, 1.845, -0.018), 0.022, 0.004);
+        d = min(d, sdEllipsoid(p - vec3(0.0, 0.995, 0.002), vec3(0.152, 0.045, 0.102)));
+        float xi = clamp(round(p.x / 0.055), -2.0, 2.0) * 0.055;
+        float zc = 0.1 * sqrt(max(0.0, 1.0 - xi * xi / 0.0225)) - 0.004;
+        d = min(d, sdRoundBox(vec3(p.x - xi, p.y - 0.995, p.z - zc), vec3(0.018, 0.02, 0.012), 0.006));
+        float yi = clamp(round((p.y - 0.945) / 0.045), -1.0, 1.0) * 0.045 + 0.945;
+        d = min(d, sdRoundBox(vec3(q.x - 0.302, p.y - yi, p.z - 0.03), vec3(0.022, 0.006, 0.003), 0.002));
+        d = min(d, sdRoundCone(q, vec3(0.238, 1.02, -0.005), vec3(0.258, 0.85, 0.04), 0.05, 0.042));
+        d = min(d, sdRoundCone(ql, vec3(0.108, 0.36, -0.005), vec3(0.11, 0.12, -0.008), 0.06, 0.048));
+        return d;
+      }
+
+      float suitSDF(vec3 p, int kind) {
+        if (kind == SUIT_IRON) return max(min(mannequin(p, 0.012), ironPlates(p)), -reactorWell(p));
+        if (kind == SUIT_BAT) return min(min(mannequin(p, 0.01), batExtras(p)), suitCape(p));
+        return mannequin(p, -0.002);
+      }
+
+      // is a point on the front of the head inside an eye? e is from the eye's middle, tilted so its outer end rises
+      float eyeShape(vec3 s, vec2 at, vec2 r, float tilt) {
+        vec2 e = vec2(abs(s.x) - at.x, s.y - at.y);
+        float c = cos(tilt), sn = sin(tilt);
+        e = vec2(c * e.x + sn * e.y, -sn * e.x + c * e.y);
+        return length(e / r);
+      }
+
+      int suitMaterial(vec3 s, vec3 n, int kind) {
+        if (kind == SUIT_BAT) return suitCape(s) < 0.003 ? M_CAPE : M_SUIT;
+        if (kind != SUIT_IRON) return M_SUIT;
+        if (n.z > 0.4 && s.y > 1.6 && eyeShape(s, vec2(0.03, 1.677), vec2(0.026, 0.0075), 0.15) < 1.0) return M_SUIT_GLOW;
+        if (n.z > 0.85 && s.z < 0.125 && length(vec2(s.x, s.y - 1.33)) < 0.033) return M_SUIT_GLOW; // the reactor's floor
+        return M_ARMOUR;
+      }
+
+      void suits(vec3 o, vec3 d, inout Hit l) {
+        for (int i = 0; i < 3; i++) {
+          vec3 so = o - vec3(bayCentre(i), SUIT_BASE, SUIT_OUT);
+          float tn, tf; vec3 n;
+          if (!slab(so, d, vec3(-0.44, 0.0, -0.36), vec3(0.44, 1.9, 0.3), tn, tf, n) || tn >= l.t) continue;
+          int kind = suitKind(i);
+          float t = max(tn, 1e-4);
+          tf = min(tf, l.t);
+          float dist = 1.0;
+          bool hit = false;
+          for (int k = 0; k < 180; k++) {
+            dist = suitSDF(so + d * t, kind);
+            if (dist < 4e-4) { hit = true; break; }
+            t += max(dist * 0.85, 3e-4);
+            if (t > tf) break;
+          }
+          // out of steps creeping along a silhouette: within a few mm counts as a hit
+          if (!hit && (dist > 3e-3 || t > tf)) continue;
+          vec3 p = so + d * t;
+          vec2 e = vec2(5e-4, 0.0);
+          n = normalize(vec3(suitSDF(p + e.xyy, kind) - suitSDF(p - e.xyy, kind), suitSDF(p + e.yxy, kind) - suitSDF(p - e.yxy, kind), suitSDF(p + e.yyx, kind) - suitSDF(p - e.yyx, kind)));
+          l.t = t; l.n = n; l.m = suitMaterial(p, n, kind);
+        }
+      }
+
+      void armourRow(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = rowLocal(wo), d = rowLocalDir(wd);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-2.2, 0.0, 0.0), vec3(2.2, 2.8, 1.02), tn, tf, n) || tn >= h.t) return;
+        Hit l; l.t = h.t; l.m = M_NONE; l.n = vec3(0);
+        if (DESIGN == 0) alcoves(o, d, l); else if (DESIGN == 1) cases(o, d, l); else glassCases(o, d, l);
+        suits(o, d, l);
+        if (l.t < h.t) { h.t = l.t; h.n = rowWorldDir(l.n); h.m = l.m; }
+      }
+
+      // ---- the vines ----
+      // Climbing roses cascading from the ceiling down the left wall and framing the armour row: a mass
+      // across the top that piles over the row and trails strands down its front, and a curtain down each
+      // side to the floor. All of it is a relief on the wall (row frame: x along the wall, y up, z out of
+      // it): woody stems, a dark underlayer in the mass, individual leaves laid over that on three
+      // overlapping grids, and roses in clusters. vineT is the relief's height off the wall; the march
+      // treats it as a heightfield, so leaf edges are real steps and the leaves overlap.
+      // Every GLSL call is inlined, so the field is evaluated from as few places as possible: the driver
+      // took ten minutes to compile a version with a dozen copies of it.
+      const float VINE_CELL = 0.05, VINE_TMAX = 0.25, VINE_HW = 3.6;
+      float vineFrameHW() { return DESIGN == 0 ? 2.15 : 1.62; }
+      float vineFrameTop() { return DESIGN == 0 ? 2.78 : 2.32; }
+
+      float vnoise1(float x, float seed) { float i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(hash2(vec2(i, seed)), hash2(vec2(i + 1.0, seed)), f); }
+
+      // the bottom edge of the mass hanging from the ceiling
+      float vineMassLine(float x) { float hw = vineFrameHW(); return 5.55 + 0.6 * vnoise1(x * 1.4, 2.0) + 0.4 * smoothstep(hw + 0.9, hw + 1.9, abs(x)); }
+
+      // One set of strands hanging from the mass: lanes across the wall, each strand meandering a little
+      // and ending at its own height. Over the row they stop above it; just outside it they run down to
+      // the floor (the frame); further out they get shorter. Returns how densely leaves grow round the
+      // strand at q (0..1); stem is the woody stem's height off the wall there (< 0 off the stem).
+      float vineLane(vec2 q, float freq, float seed, out float stem) {
+        float hw = vineFrameHW(), top = vineFrameTop();
+        float u = q.x * freq + seed + 0.3 * sin(q.y * 2.1 + seed * 7.0) + 0.1 * sin(q.y * 5.3 + seed * 3.0);
+        float id = floor(u);
+        float ax = abs((id + 0.5 - seed) / freq);
+        float h1 = hash2(vec2(id, seed + 1.0)), h2 = hash2(vec2(id, seed + 2.0));
+        float bottom;
+        if (h2 < 0.15) bottom = 5.3 + h1;
+        else if (ax < hw + 0.1) bottom = top + 0.1 + 1.0 * h1 * h1;
+        else if (ax < hw + 0.7) bottom = 0.9 * h1 * h1;
+        else if (ax < hw + 1.3) bottom = 1.4 + 3.2 * h1;
+        else bottom = 4.9 + 1.2 * h1;
+        stem = -1.0;
+        if (q.y < bottom) return 0.0;
+        float across = abs(fract(u) - 0.5) / freq;
+        float r = 0.004 + 0.005 * smoothstep(bottom, H, q.y); // thickening towards the top
+        if (across < r) stem = 0.006 + 2.0 * sqrt(r * r - across * across);
+        float clump = 0.3 + 1.2 * vnoise1(q.y * 6.0, id * 3.1 + seed);
+        float width = mix(0.025, 0.08, smoothstep(bottom, H, q.y)) * (0.6 + 0.8 * h2) * clump * smoothstep(bottom, bottom + 0.3, q.y);
+        return 1.0 - smoothstep(0.5 * width, width + 0.025, across);
+      }
+
+      // how densely leaves grow at a point: the mass (thinning out at its ragged bottom edge) and the strands
+      float vineDensity(vec2 c) {
+        float hw = vineFrameHW();
+        float ax = abs(c.x);
+        if (ax > VINE_HW) return 0.0;
+        float line = vineMassLine(c.x);
+        float dens = smoothstep(line - 0.2, line + 0.1, c.y);
+        if (dens >= 1.0) return 1.0;
+        float st;
+        dens = max(dens, vineLane(c, 7.3, 0.0, st));
+        dens = max(dens, vineLane(c, 4.6, 0.47, st));
+        if (ax > hw - 0.1 && ax < hw + 1.1) dens = max(dens, vineLane(c, 11.0, 0.21, st));
+        return dens;
+      }
+
+      // The leaf of one grid cell, if the cell has one: its height off the wall at q, or -1 when q is off
+      // it. A leaf fits inside its cell, so only q's own cell in each of the three grids is looked at.
+      // info is how far along the leaf q is, how far across (-1..1) and the leaf's own hash, for colouring.
+      float vineLeaf(vec2 q, vec2 cell, float dens, out vec3 info) {
+        info = vec3(0.0);
+        if (hash2(cell * 0.37 + 0.3) > dens) return -1.0;
+        float len = 0.032 + 0.018 * hash2(cell + 5.7);
+        vec2 centre = (cell + 0.5) * VINE_CELL + (VINE_CELL - len) * (vec2(hash2(cell + 1.3), hash2(cell + 2.9)) - 0.5);
+        float ang = 6.2831853 * hash2(cell + 4.1);
+        vec2 dir = vec2(cos(ang), sin(ang));
+        vec2 v = q - centre;
+        float k = dot(v, dir) / len + 0.5;
+        if (k < 0.0 || k > 1.0) return -1.0;
+        float b = dot(v, vec2(-dir.y, dir.x));
+        float w = 0.34 * len * pow(sin(3.14159 * k), 0.75); // ovate, pointed at both ends
+        float bw = b / max(w, 1e-4);
+        if (abs(bw) > 1.0) return -1.0;
+        float base = 0.012 + 0.1 * hash2(cell + 7.3) * dens; // piled higher in the thick of the mass
+        float lift = 0.036 * (hash2(cell + 8.1) - 0.35); // the tip rising or drooping
+        float h = base + lift * k + 0.0022 * (1.0 - bw * bw) - 0.0012 * exp(-b * b / 8e-6);
+        info = vec3(k, bw, hash2(cell + 9.9));
+        return h;
+      }
+
+      // roses on their own coarser grid, in clusters: height off the wall or -1; info is the petal
+      // relief (0..1) and the radius fraction, for colouring
+      float vineRoseT(vec2 q, out vec2 info) {
+        info = vec2(0.0);
+        vec2 id = floor(q / 0.115), c = (id + 0.5) * 0.115;
+        float cluster = smoothstep(0.5, 0.72, noise(c * 1.5 + 3.0));
+        if (hash2(id + 17.0) > 0.03 + 0.75 * cluster) return -1.0;
+        if (vineDensity(c) < 0.45) return -1.0;
+        vec2 centre = c + 0.03 * (vec2(hash2(id + 3.0), hash2(id + 9.0)) - 0.5);
+        float R = 0.028 + 0.016 * hash2(id + 5.0);
+        vec2 v = q - centre;
+        float ang = atan(v.y, v.x);
+        float ph = 6.2831853 * hash2(id + 11.0);
+        float r = length(v) / (R * (1.0 + 0.1 * cos(5.0 * ang + ph)) ); // a scalloped outline: the outer petals
+        if (r > 1.0) return -1.0;
+        float outer = (0.5 + 0.5 * cos(5.0 * ang + ph)) * smoothstep(0.25, 0.6, r); // creases between the outer petals
+        float inner = (0.5 + 0.5 * cos(3.0 * ang - 11.0 * r + ph)) * (1.0 - smoothstep(0.3, 0.7, r)); // the whorl in the middle
+        float petals = max(outer, inner);
+        info = vec2(petals, r);
+        return 0.09 + 0.05 * hash2(id + 13.0) + 0.026 * sqrt(1.0 - r * r) + 0.004 * petals;
+      }
+
+      // the relief's height off the wall at q, and what's on top there: 0 the underlayer, 1 a stem,
+      // 2 a leaf, 3 a rose
+      float vineT(vec2 q, out int kind, out vec3 info) {
+        kind = 0; info = vec3(0.0);
+        float hw = vineFrameHW();
+        if (abs(q.x) > VINE_HW) return -0.03;
+        float T = -0.03, st;
+        vineLane(q, 7.3, 0.0, st); if (st > T) { T = st; kind = 1; }
+        vineLane(q, 4.6, 0.47, st); if (st > T) { T = st; kind = 1; }
+        if (abs(q.x) > hw - 0.1 && abs(q.x) < hw + 1.1) { vineLane(q, 11.0, 0.21, st); if (st > T) { T = st; kind = 1; } }
+        float line = vineMassLine(q.x);
+        float mass = smoothstep(line - 0.1, line + 0.15, q.y);
+        if (mass > 0.0) { float u = mass * (0.02 + 0.07 * fbm(q * 1.6 + 2.0)); if (u > T) { T = u; kind = 0; } }
+        for (int g = 0; g < 3; g++) { // three grids, offset by a third of a cell, so leaves overlap
+          vec2 qg = q + float(g) * VINE_CELL * vec2(0.333, 0.667) + float(g) * 31.0;
+          vec2 cell = floor(qg / VINE_CELL);
+          float dens = vineDensity((cell + 0.5) * VINE_CELL - float(g) * VINE_CELL * vec2(0.333, 0.667) - float(g) * 31.0);
+          if (dens <= 0.0) continue;
+          vec3 li;
+          float h = vineLeaf(qg, cell, dens, li);
+          if (h > T) { T = h; kind = 2; info = li; }
+        }
+        vec2 ri;
+        float hr = vineRoseT(q, ri);
+        if (hr > T) { T = hr; kind = 3; info = vec3(ri, 0.0); }
+        return T;
+      }
+      float vineH(vec2 q) { int k; vec3 i; return vineT(q, k, i); }
+
+      void vines(vec3 wo, vec3 wd, inout Hit h) {
+        vec3 o = rowLocal(wo), d = rowLocalDir(wd);
+        float tn, tf; vec3 n;
+        if (!slab(o, d, vec3(-VINE_HW, 0.0, 0.0), vec3(VINE_HW, H, VINE_TMAX), tn, tf, n) || tn >= h.t) return;
+        float t = max(tn, 1e-4);
+        tf = min(tf, h.t);
+        // One loop does all of it so the relief is evaluated in one place. Phase 0 marches by the gap
+        // between the ray and the relief, the step capped so a leaf standing proud isn't jumped over;
+        // phase 1 bisects the crossing; phases 2 and 3 take the two taps for the normal.
+        const float e = 1e-3;
+        int phase = 0, bis = 0;
+        float lo = t, hi = t, gap = 1.0, tx = 0.0, ty = 0.0;
+        vec3 p = o + d * t;
+        for (int i = 0; i < 190; i++) {
+          vec2 q = phase == 0 ? (o + d * t).xy : phase == 1 ? (o + d * (0.5 * (lo + hi))).xy : phase == 2 ? p.xy + vec2(e, 0.0) : p.xy + vec2(0.0, e);
+          float T = vineH(q);
+          if (phase == 0) {
+            gap = (o + d * t).z - T;
+            if (gap < 0.0) { hi = t; phase = 1; continue; }
+            if (gap < 8e-4 || i >= 176) { // out of steps creeping along the relief: within a few mm counts
+              if (gap > 4e-3) return;
+              p = o + d * t; phase = 2; continue;
+            }
+            lo = t;
+            t += clamp(gap * 0.7, 1.5e-3, 0.02);
+            if (t > tf) return;
+          } else if (phase == 1) {
+            float m = 0.5 * (lo + hi);
+            if ((o + d * m).z - T < 0.0) hi = m; else lo = m;
+            if (++bis == 6) { t = 0.5 * (lo + hi); p = o + d * t; phase = 2; }
+          } else if (phase == 2) { tx = T; phase = 3; }
+          else { ty = T; phase = 4; break; }
+        }
+        if (phase != 4) return;
+        h.t = t; h.n = rowWorldDir(normalize(vec3(p.z - tx, p.z - ty, e))); h.m = M_VINE;
+      }
+
+      vec3 vineSurface(vec3 p) {
+        vec3 q = rowLocal(p);
+        int kind; vec3 info;
+        vineT(q.xy, kind, info);
+        vec2 tq = q.xy - vec2(0.0, 3.0);
+        if (kind == 1) return vec3(0.07, 0.04, 0.02) * (0.7 + 0.6 * noise(tq * 60.0)); // woody stems
+        if (kind == 2) { // leaves: two greens, each leaf its own shade, lighter towards the tip, a pale midrib
+          vec3 g = mix(vec3(0.04, 0.1, 0.022), vec3(0.11, 0.2, 0.035), smoothstep(0.3, 0.7, info.z));
+          g *= (0.7 + 0.6 * fract(info.z * 7.1)) * (0.85 + 0.3 * info.x);
+          return mix(g, vec3(0.2, 0.28, 0.08), 0.45 * exp(-info.y * info.y * 120.0));
+        }
+        if (kind == 3) { // roses: pink, the petals lighter than the creases, darker into the middle
+          vec3 pink = mix(vec3(0.45, 0.04, 0.14), vec3(0.85, 0.36, 0.5), 0.35 + 0.65 * info.x);
+          return pink * (0.5 + 0.5 * smoothstep(0.0, 0.4, info.y));
+        }
+        return vec3(0.02, 0.05, 0.012) * (0.6 + 0.8 * noise(tq * 40.0)); // the mass's shadowed underlayer
+      }
+
       Hit trace(vec3 o, vec3 d) {
         Hit h; h.t = 1e9; h.m = M_NONE; h.n = vec3(0);
         shell(o, d, h);
@@ -1156,11 +1579,15 @@
         workstation(o, d, h);
         artCorner(o, d, h);
         letters(o, d, h);
+        armourRow(o, d, h);
+        vines(o, d, h);
         return h;
       }
 
       bool occluded(vec3 o, vec3 d, float maxT) {
+        skipPanes = true;
         Hit h = trace(o, d);
+        skipPanes = false;
         return h.m != M_TUBE && h.t < maxT - 1e-3;
       }
 
@@ -1614,6 +2041,108 @@
 
       // The rug: red pile, mottled tuft by tuft, and darker where its edge rolls over. The chalk dust
       // in front of the board is trodden into it, and any paint flicked this far would land on it.
+      // the bat on Batman's chest, in chest coordinates (metres from its middle)
+      bool batShape(vec2 q) {
+        vec2 a = vec2(abs(q.x), q.y);
+        if (a.x < 0.016 && a.y > 0.0 && a.y < 0.062 - 2.2 * max(0.0, a.x - 0.006)) return true; // head and ears
+        if (length(vec2(a.x / 0.125, a.y / 0.046)) > 1.0) return false;
+        if (a.x > 0.016 && a.x < 0.05 && a.y > 0.046 - 0.9 * (a.x - 0.016)) return false; // the dip beside the head
+        if (length(a - vec2(0.03, -0.052)) < 0.03 || length(a - vec2(0.078, -0.05)) < 0.027 || length(a - vec2(0.115, -0.035)) < 0.018) return false; // scallops
+        return true;
+      }
+      // red webbing: spokes from a point and rings round it, lines ~2.5 mm wide (v in metres from the point)
+      float webbing(vec2 v, float ring, float spokes) {
+        float r = length(v);
+        float ang = atan(v.x, v.y);
+        float spoke = abs(fract(ang * spokes / 6.2831853) - 0.5) * 6.2831853 / spokes * r;
+        float hoop = abs(fract(r / ring + 0.5) - 0.5) * ring;
+        return max(edgeLine(spoke, 0.0025), edgeLine(hoop, 0.0022));
+      }
+
+      vec3 suitSurface(vec3 p, vec3 n) {
+        vec3 q = rowLocal(p);
+        int i = bayOf(q.x);
+        int kind = suitKind(i);
+        vec3 s = q - vec3(bayCentre(i), SUIT_BASE, SUIT_OUT);
+        vec3 ln = rowLocalDir(n);
+        float ax = abs(s.x);
+        float side = ln.x * sign(s.x); // > 0 on the outside of a limb
+        if (kind == SUIT_IRON) {
+          const vec3 red = vec3(0.42, 0.028, 0.022), gold = vec3(0.72, 0.5, 0.17), joint = vec3(0.07);
+          vec3 col = red;
+          float seam = 0.0;
+          if (s.y > 1.535) { // the helmet: a gold faceplate set in the red
+            vec2 f = vec2(ax, s.y - 1.652);
+            float faceHW = 0.062 * sqrt(max(0.0, 1.0 - f.y * f.y / 0.0095));
+            bool face = s.z > 0.03 && f.y > -0.093 && f.x < faceHW;
+            bool jaw = s.y < 1.6 && s.z > 0.055 && ax < 0.046;
+            if (face || jaw) col = gold;
+            seam = max(seam, edgeLine(f.x - faceHW, 0.003) * step(0.03, s.z) * step(-0.093, f.y));
+            seam = max(seam, edgeLine(s.y - 1.6, 0.003) * step(0.04, s.z)); // the jaw's hinge line
+            seam = max(seam, edgeLine(s.y - 1.545, 0.003)); // the neck ring
+            return mix(col, joint, 0.8 * seam);
+          }
+          float rr = length(vec2(s.x, s.y - 1.33));
+          if (rr < 0.036 && s.z < 0.13) return vec3(0.3); // the reactor well's wall
+          if (rr < 0.05 && s.z > 0.1) return mix(vec3(0.55), red, smoothstep(0.044, 0.05, rr)); // its rim
+          if (abs(s.y - 1.125) < 0.018 && ax > 0.19) return joint; // elbows
+          if (abs(s.y - 0.505) < 0.028 && ax < 0.2 && s.z < 0.025) return joint; // the backs of the knees
+          if (s.y > 1.2 && s.y < 1.4 && ax < 0.19 && ax > 0.13 - 0.15 * (s.y - 1.33) && s.z > 0.02) col = gold; // the chest's gold sides
+          if (s.y > 1.4 && ax > 0.09 && ax < 0.19 && s.z > -0.03) col = gold; // the collar plates over the shoulders
+          if (s.y > 0.985 && s.y < 1.2 && ax < 0.115) { // the abdomen's stacked plates
+            col = gold;
+            if (fract((s.y - 0.985) / 0.054) > 0.86) col = joint;
+            seam = max(seam, edgeLine(ax, 0.0025));
+          }
+          if (s.y > 0.985 && s.y < 1.2 && ax >= 0.115 && ax < 0.165) seam = max(seam, edgeLine(ax - 0.115, 0.003));
+          if (ax > 0.17 && s.y > 1.15 && s.y < 1.36 && side > 0.15) col = gold; // the upper arms' outer plates
+          if (s.y > 0.58 && s.y < 0.86 && ax > 0.115 && side > 0.2) col = gold; // the thighs' outer plates
+          if (s.y < 0.9 && s.y > 0.84 && ax < 0.045 && s.z > 0.0) col = joint; // between the hip plates
+          // plate edges as dark seams
+          seam = max(seam, edgeLine(s.y - 1.2, 0.0025) * step(ax, 0.17));
+          seam = max(seam, edgeLine(s.y - 0.985, 0.0025) * step(ax, 0.17));
+          seam = max(seam, edgeLine(s.y - 0.86, 0.0025) * step(0.03, ax) * step(ax, 0.2));
+          seam = max(seam, edgeLine(s.y - 0.44, 0.0025) * step(0.03, ax) * step(ax, 0.2));
+          seam = max(seam, edgeLine(s.y - 0.13, 0.0025) * step(0.03, ax) * step(ax, 0.2));
+          seam = max(seam, edgeLine(s.y - 1.365, 0.0025) * step(0.17, ax)); // pauldron to arm
+          seam = max(seam, edgeLine(ax - 0.19, 0.0025) * step(1.2, s.y) * step(s.y, 1.42)); // chest to pauldron
+          seam = max(seam, edgeLine(s.y - 1.42, 0.0025) * step(ax, 0.1) * step(0.05, s.z)); // the collar plate
+          if (s.y > 1.2 && s.y < 1.4 && s.z > 0.02) seam = max(seam, edgeLine(ax - (0.13 - 0.15 * (s.y - 1.33)), 0.0025)); // the chest plate's V
+          return mix(col, joint, 0.8 * seam);
+        }
+        if (kind == SUIT_MILES) {
+          const vec3 black = vec3(0.022), red = vec3(0.6, 0.03, 0.035);
+          if (s.y > 1.55 && ln.z > 0.15) {
+            float k = eyeShape(s, vec2(0.037, 1.672), vec2(0.036, 0.024), 0.42);
+            if (k < 1.0) return vec3(0.85);
+            if (k < 1.22) return vec3(0.006);
+          }
+          if (s.y > 1.545 && ln.z > -0.35) return mix(black, red, webbing(vec2(s.x, s.y - 1.70), 0.03, 16.0)); // the mask's webbing
+          if (s.y > 1.34 && length(vec2(ax - 0.19, s.y - 1.42)) < 0.1) return mix(black, red, webbing(vec2(ax - 0.19, s.y - 1.46), 0.034, 12.0)); // the shoulders
+          if (ax > 0.215 && s.y < 1.0) { // gloves
+            if (s.y < 0.74) return red; // fingertips
+            return mix(black, red, webbing(vec2(s.z - 0.04, s.y - 0.77), 0.028, 12.0));
+          }
+          if (s.z > 0.04 && s.y > 1.14 && s.y < 1.44 && ax < 0.14) {
+            vec2 xz = RUG_POS + vec2(-s.x, s.y - 1.29) * 23.0; // the same spider as the rug
+            if (rugEdge(xz) < 0.0) return red;
+          }
+          if (s.y < 0.012) return red; // soles
+          return mix(black, vec3(0.035), 0.5 * webbing(vec2(s.x, s.y - 1.29), 0.032, 18.0)); // faint webbing over the rest
+        }
+        const vec3 grey = vec3(0.13), black = vec3(0.02), yellow = vec3(0.7, 0.5, 0.08);
+        if (s.y > 1.535 || s.y > 1.42 + 0.9 * ax) { // the cowl, its bib a V on the chest
+          if (ln.z > 0.3 && eyeShape(s, vec2(0.036, 1.675), vec2(0.024, 0.011), 0.3) < 1.0) return vec3(0.8);
+          return black;
+        }
+        if (abs(s.y - 0.995) < 0.032) return yellow; // belt and pouches
+        if (ax > 0.215 && s.y < 1.04) return black; // gloves and fins
+        if (s.y < 0.36) return black; // boots
+        if (s.y > 0.78 && s.y < 0.965) return black; // trunks
+        if (s.z > 0.04 && batShape(vec2(s.x, s.y - 1.31))) return black;
+        return grey;
+      }
+
       vec3 rugSurface(vec3 p) {
         vec2 q = p.xz - RUG_POS; // small numbers, so the noise stays fine-grained
         vec3 a = RUG_RED * (0.8 + 0.32 * noise(q * 110.0)) * (0.88 + 0.24 * fbm(q * 2.3 + 5.0));
@@ -1632,6 +2161,11 @@
       // floor round the easel and onto the sofa — and the red rug.
       vec3 surface(int m, vec3 p, vec3 n) {
         if (m == M_RUG) return rugSurface(p);
+        if (m == M_SUIT || m == M_ARMOUR) return suitSurface(p, n);
+        if (m == M_CAPE) return vec3(0.03);
+        if (m == M_VINE) return vineSurface(p);
+        if (m == M_BAY) return vec3(0.09);
+        if (m == M_BAY_BACK) return vec3(0.16);
         if (m == M_WAX) return vec3(0.87, 0.84, 0.77);
         if (m == M_CANVAS) return canvasSurface(p);
         if (m == M_PALETTE) return paletteSurface(p);
@@ -1682,6 +2216,14 @@
 
       float emission(int m, vec3 p) {
         if (m == M_TUBE) return TUBE_LE;
+        if (m == M_LED) return STRIP_LE;
+        if (m == M_SUIT_GLOW) return VISOR_LE;
+        if (m == M_BAY_BACK) {
+          vec3 q = rowLocal(p);
+          float x = abs(q.x - bayCentre(bayOf(q.x)));
+          bool slat = x > 0.21 && x < 0.39 && q.y > 0.5 && q.y < (DESIGN == 0 ? 2.3 : 2.05) && fract((q.y - 0.5) / 0.12) < 0.18;
+          return slat ? SLAT_LE : 0.0;
+        }
         if (m == M_BACK && abs(p.x) < DOOR_HALF_W && p.y < DOOR_H) {
           float slats = 0.8 + 0.2 * smoothstep(0.3, 0.5, abs(fract(p.x / 0.18) - 0.5) * 2.0);
           return DOOR_LE * slats * (0.85 + 0.15 * p.y / DOOR_H);
@@ -1690,6 +2232,21 @@
       }
 
       // ---- lighting ----
+      float bayLight(vec3 p, vec3 n) {
+        vec3 q = rowLocal(p);
+        if (q.z > 2.0 || abs(q.x) > 2.6 || q.y > headerY()) return 0.0;
+        float c = bayCentre(bayOf(q.x));
+        vec3 s = rowWorld(vec3(c + (rnd() * 2.0 - 1.0) * PANEL_HW, headerY() - 0.006, mix(PANEL_Z0, PANEL_Z1, rnd())));
+        vec3 v = s - p;
+        float dist2 = dot(v, v);
+        float dist = sqrt(dist2);
+        vec3 dir = v / dist;
+        float cosS = dot(n, dir), cosL = -dir.y;
+        if (cosS <= 0.0 || cosL <= 0.0) return 0.0;
+        if (occluded(p + n * 2e-3, dir, dist)) return 0.0;
+        return BAY_LE * cosS * cosL * (2.0 * PANEL_HW * (PANEL_Z1 - PANEL_Z0)) / dist2 / PI;
+      }
+
       vec3 tubeCentre(int r, int c) { return vec3(COL0 + float(c) * COL_STEP, TUBE_Y, ROW0 + float(r) * ROW_STEP); }
 
       float tubeWeight(vec3 p, vec3 n, vec3 lc) {
@@ -1875,6 +2432,7 @@
 
           float e = emission(h.m, p);
           if (h.m == M_TUBE) { if (countEmitters) radiance += throughput * e; break; }
+          if (h.m == M_DOWNLIGHT) { if (countEmitters) radiance += throughput * BAY_LE; break; }
           if (e > 0.0) { radiance += throughput * e; break; }
           if (h.m == M_SCREEN) radiance += throughput * screenLight(p); // the screen's own light; it goes on as a dark matt surface
 
@@ -1885,9 +2443,10 @@
           // sealed concrete, vinyl and glass: a faint, slightly blurry mirror, strongest at grazing angles
           bool record = h.m == M_RECORD && vinyl(p, n);
           bool glass = h.m == M_GLASS;
-          if (h.m == M_FLOOR || record || glass) {
+          bool pane = h.m == M_PANE, armour = h.m == M_ARMOUR;
+          if (h.m == M_FLOOR || record || glass || pane || armour) {
             float grazing = pow(1.0 - max(0.0, -dot(d, n)), 5.0);
-            float fresnel = glass ? 0.04 + 0.6 * grazing : (record ? 0.05 : 0.025) + (record ? 0.7 : 0.5) * grazing;
+            float fresnel = pane ? 0.05 + 0.6 * grazing : armour ? 0.1 + 0.6 * grazing : glass ? 0.04 + 0.6 * grazing : (record ? 0.05 : 0.025) + (record ? 0.7 : 0.5) * grazing;
             if (rnd() < fresnel) {
               vec3 r = reflect(d, n);
               // a dark record shows every overbright sample as a white speck, so its highlights are capped
@@ -1905,7 +2464,8 @@
             }
           }
 
-          radiance += throughput * a * directLight(p, n);
+          if (pane) { throughput *= vec3(0.9, 0.95, 0.94); o = p + d * 2e-3; continue; }
+          radiance += throughput * a * (directLight(p, n) + bayLight(p, n));
           // the candles' light only for the first two bounces: past that it is too faint to matter
           if (bounce < 2) {
             vec3 lit = throughput * a * CANDLE_RGB * candleLight(p, n, which);

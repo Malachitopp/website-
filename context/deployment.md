@@ -4,7 +4,11 @@ Read this only for deploy, hosting, env-var-on-host or domain work. Overview: `c
 
 ## How changes reach the live site
 - **Code**: push to `main` → Vercel builds and deploys production (≈ 1 min). Even a push of only `context/`
-  files redeploys (harmless). Other branches get **preview deployments** (their own URL). From the desktop,
+  files redeploys (harmless). Other branches get **preview deployments** (their own URL). **Previews are
+  behind Vercel login** (a plain fetch 302s to `vercel.com/sso-api`) — the user must be logged in to Vercel,
+  on the phone too. Find the URL: Vercel dashboard → Deployments, the PR's Vercel comment, the commit's ✓ →
+  Details, or `gh api repos/Malachitopp/website-/deployments?sha=<sha>` → `/deployments/<id>/statuses`
+  (`environment_url`). From the desktop,
   `vercel deploy --prod` at the repo root also works (CLI logged in as `malachitopp-5255`).
 - **Gallery content**: added on the live site (faint `+` or shift+A on the wall, then the `ART_SECRET` word) →
   Cloudinary + **Neon**, not git. Neon and local Docker are separate databases; Cloudinary's `art` folder is shared

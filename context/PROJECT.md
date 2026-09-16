@@ -1,9 +1,9 @@
 # malachitopp.com — project context
 
-Last updated: 2026-09-16
+Last updated: 2026-09-17
 
 **How these notes are split** (trimmed 2026-09-16 to save tokens; the pre-trim 169 KB version is in git
-history as `context/PROJECT.md` at `57a7b8b`, plus that day's uncommitted additions):
+history as `context/PROJECT.md` at `57a7b8b`, if an old detail is ever needed):
 - **This file**: what the project is, stack, backend, schema, general gotchas, local dev, remaining
   work, file map, working style. Read it to get caught up.
 - **`context/studio.md`**: the studio page's overlays, the scene's contents and the path-traced
@@ -34,9 +34,11 @@ Items so far (details in `context/studio.md`):
 
 Scenery: the tagline blackboard ("A theoretical / physics student"), the name hanging letter by
 letter from the tubes, the user's dog asleep on a sofa (breathing in the loops, not clickable), oak
-crates and coloured paint (colour against the grey hall is deliberate). A **Miles Morales spider rug**
-is in the shader but not rendered yet, and **suit display stands** are designed but not added (see
-Remaining work). A dismissible "explore by pressing on things" note shows on arrival. The old name +
+crates and coloured paint (colour against the grey hall is deliberate), a 6 m **Miles Morales spider
+rug** on the floor, and an **armour row** by the left wall: three glass cases with Iron Man Mark VII,
+Miles Morales and Batman, framed by climbing roses cascading from the ceiling (scenery; "maybe zoom in
+later"). A dismissible "explore by pressing on things" note shows on arrival; on phones the overview
+is a wide picture you **swipe to look around** (the note says so). The old name +
 Spotify page lives at `/spotify` (nothing links to it yet).
 
 ## Stack
@@ -198,22 +200,31 @@ the browser uploads.
   views it via `graphify-out/graph.html`. Not read automatically by any session.
 
 ## Remaining work
-- **Render the Miles Morales rug — waiting on the user's OK of the 6 m size** (previews sent). Then
-  `node tools/studio-render/render.mjs --only overview,music,walk` (≈ 2½ h). **Give the command only
-  after approval and ask them to say when it's running** (last time they started it immediately and a
-  shader edit mixed two sizes). Commit renders with the shader. Details in `context/studio.md`.
-- **Suit display stands — designed, not added.** Design page: https://claude.ai/artifact/6RPzXMT1jaJYRLFvQUivn7
-  (1000 × 800 × 2300 mm blackened-steel bays; option A four glass-fronted bays in a 20 ft container,
-  option B five open alcoves round an arc). **Open questions**: glass or open; container or curved
-  hall; which suits; scenery or a walk-up item. Don't model until they choose. Reddit refs 403 — ask
-  for screenshots.
+- **Rug, armour row, vines and phone swipe: rendered and committed on branch `armour-stands` (2026-09-17),
+  not pushed.** The user decides: push the branch for a Vercel preview (behind Vercel login), or merge into
+  `main` and push (deploys). Renders: rug run 2026-09-16 (landscape all, portrait overview) + combined run
+  17:40–00:03 (`--only overview,easel,walk` landscape; `overview,music,easel,walk` portrait, 6 h 20 min).
+  Details and costs in `context/studio.md`. Suggest `/graphify --update` after it lands.
+- **Armour follow-ups the user may want**: Iron Man's panel lines are painted seams, not bevels (slightly
+  toy-like face-on); roses read as five-petal blossoms up close; the phone hologram stays clamped at the
+  screen edge when swiped away from the music corner (could slide off with it instead); phone overview loop
+  is now 2.9 MB (was 1.1 MB). A "zoom in on the suits" close-up would be a new studio item (checklist in
+  `context/studio.md`) and a walk render. Any change the overview sees is now ≈ 8 h to re-render fully.
+- **How the armour row was decided (2026-09-16)**: brief "not a circle; stack them on the left side of the
+  wall in the background; decorations, maybe zoom in later; Mark 7, Miles, Batman — just let me have a
+  look". Rough previews → user chose glass cases; three positions previewed from the door (13.5 / 16.6 /
+  18.2 m; 26 m rejected, "behind the canvas") → 16.6 m, and the phone problem (row off the phone's frame at
+  any position) solved with swipe-to-look rather than by moving it. Modelling and the swipe feature were done
+  by two parallel subagents at the user's request to keep this chat's context small. `tools/studio-render/
+  peek.mjs <design> <spp> name:w:h:px,py,pz:tx,ty,tz:fov[:exposure]` renders quick stills from `index.html`
+  next to it (the `design` arg is now ignored). Old design page: https://claude.ai/artifact/6RPzXMT1jaJYRLFvQUivn7
 - **More laptop shortcuts** — the user names them; add to `SHORTCUTS` in `Workstation.tsx`, no render.
 - **Don't populate the studio unprompted.** A new item's checklist is in `context/studio.md`.
-- **Commit state (late 2026-09-16):** last commit `57a7b8b`, pushed. **Uncommitted:** the grey-prints
-  fix in `MusicCorner.tsx` (verified; fixes a bug on the live site — worth committing and pushing on
-  its own), the rug + brightest-channel exposure in `tools/studio-render/index.html` (commit with its
-  renders), `.gitignore` (vault + graphify lines), `CLAUDE.md`, `.claude/skills/update/SKILL.md` and
-  the `context/` split. **Pushing `main` deploys.**
+- **Commit state (2026-09-17):** `main` = `8ce8c73` (live). Branch **`armour-stands`** (local, not pushed)
+  holds everything since: the rug + armour + vines renders (20 assets), `index.html` with the row and
+  vines, `render.mjs` with the wide phone overview, the swipe code (`Studio.tsx`, `Studio.css`,
+  `studioScene.ts`), `studio-scene.json` with `portrait.overviewSize`, `tools/studio-render/peek.mjs`, and
+  the `context/` notes. Shader and renders are in step. **Pushing `main` deploys.**
 - **First real upload through the live gallery** — the one untested step (Cloudinary secret,
   `public_id` shape). The gallery's error text says which step failed.
 - **`.env` tidy-ups**: the Vercel recovery codes were printed once in a session — the user was advised
@@ -280,9 +291,12 @@ Reference photos (baby HEIC, bedroom JPEG) live outside the repo in `../png file
   something is cleanup rather than security.
 - **Frontend: write it for them** (they read it). Requests arrive mid-turn — fold them in.
 - **Don't commit or push unless asked.** Pushing `main` deploys — say so whenever offering. A branch
-  gets a Vercel preview; suggest one for big visual changes. They've asked twice how changes reach
-  production and whether they need branches (2026-09-16) — they haven't picked a habit yet, so explain
-  it with the exact commands, not just the concept.
+  gets a Vercel preview; suggest one for big visual changes. **Their first branch flow (2026-09-16)
+  worked**: branch → push → preview → merge → push. They're new to git beyond that (asked checkout vs
+  switch — recommend `switch`/`restore`), so give exact commands, and check real state with `git`/`gh`
+  before answering ("do I need to check out the branch?" — it was already merged). When the live site
+  "hasn't changed" after a deploy, confirm the build is live (compare the served `assets/index-*.js`
+  with a local `vite build`) and then suggest a hard refresh — it was their browser cache.
 - **Obsidian/graphify (2026-09-16)**: they deleted the in-repo Obsidian vault after learning no session reads
   it; graphify's `graph.html` is how they view the graph. Advice given: one personal notes vault outside
   code projects (OneDrive is fine, set to "Always keep on this device"), graph exports in per-project

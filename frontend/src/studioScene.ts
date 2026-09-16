@@ -18,6 +18,10 @@ export type Walk = { seconds: number; fps: number; cameras: Camera[] }
 
 export type Framing = {
   size: [number, number] // the rendered frame, px
+  // the overview's still and loop where they are rendered wider than the frame (a phone's, for
+  // looking around): the same camera and height with more of the hall either side, so its middle
+  // is exactly the frame
+  overviewSize?: [number, number]
   overview: Camera
   music: Camera
   laptop: Camera
@@ -59,8 +63,9 @@ export type Scene = {
 export const scene = sceneJson as unknown as Scene
 
 // A camera looking at a screen: the rendered frame covers the viewport the way
-// object-fit: cover does, centred.
-export type Lens = { camera: Camera; size: [number, number]; width: number; height: number }
+// object-fit: cover does, centred — or, when the picture is wider than that frame and has been
+// slid along to look around (see usePan in Studio), pan px to the left of where it would be.
+export type Lens = { camera: Camera; size: [number, number]; width: number; height: number; pan?: number }
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -124,11 +129,11 @@ function focal({ camera, size: [w, h], width, height }: Lens) {
 // Where a point in the scene lands on screen (CSS px from the top left), how far in front
 // of the camera it is, and how many px a metre spans at that distance.
 export function project(lens: Lens, point: Vec3) {
-  const { camera, width, height } = lens
+  const { camera, width, height, pan = 0 } = lens
   const v = sub(point, camera.pos)
   const z = dot(v, camera.fwd)
   const k = focal(lens)
-  return { x: width / 2 + (k * dot(v, camera.right)) / z, y: height / 2 - (k * dot(v, camera.up)) / z, z, pxPerMetre: k / z }
+  return { x: width / 2 - pan + (k * dot(v, camera.right)) / z, y: height / 2 - (k * dot(v, camera.up)) / z, z, pxPerMetre: k / z }
 }
 
 // The CSS transform (with transform-origin 0 0, on an element at the viewport's top left)
@@ -137,11 +142,11 @@ export function project(lens: Lens, point: Vec3) {
 // element sits at tl + u·(tr - tl)/width + v·(bl - tl)/height in the scene; seen through
 // the lens its screen position is a projective (matrix3d) function of u and v.
 export function planeTransform(lens: Lens, [tl, tr, , bl]: Vec3[], width: number, height: number) {
-  const { camera, width: vw, height: vh } = lens
+  const { camera, width: vw, height: vh, pan = 0 } = lens
   const k = focal(lens)
   const column = (d: Vec3) => {
     const z = dot(d, camera.fwd)
-    return [(vw / 2) * z + k * dot(d, camera.right), (vh / 2) * z - k * dot(d, camera.up), z]
+    return [(vw / 2 - pan) * z + k * dot(d, camera.right), (vh / 2) * z - k * dot(d, camera.up), z]
   }
   const scale = (d: Vec3, s: number): Vec3 => [d[0] * s, d[1] * s, d[2] * s]
   const [xu, yu, wu] = column(scale(sub(tr, tl), 1 / width))

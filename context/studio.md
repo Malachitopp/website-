@@ -14,6 +14,15 @@ the renders using the renderer's own camera maths, so overlay changes need **no 
   over it (`autoPlay muted loop playsInline`); frame 0 of each loop is its still. Framing is chosen in JS with
   `useMediaQuery()`; tall screens get separately framed portrait renders, not crops. Layers are `.studio-shot`
   with `object-fit: cover`.
+- **Swipe to look around (phones, 2026-09-17)**: the portrait overview still + loop are rendered **wide**
+  (`portrait.overviewSize` = 3324×2340, 100° across; `render.mjs` `across()`), drawn at the normal frame's
+  cover scale so the middle is pixel-identical to the walks' first/last frame, and panned by `usePan()` in
+  `Studio.tsx` (pointer drag, 6 px press-vs-drag threshold, light coast unless reduced motion; `<main>` is
+  `.is-wide`). `Lens.pan` (px) is subtracted in `project()`/`planeTransform()`, so hotspots and overlays
+  follow. Tapping an item `settle()`s the pan to 0 in 250 ms, then the walk plays unchanged. Only active when
+  the loaded still really is wider than the frame (`wideStill` from `naturalWidth`), so an old 1170-px still
+  degrades to the plain page. Hint reads "swipe to look around, press things" there. Known: the hologram keeps
+  its stay-on-screen clamp, so panned away from the corner it sits at the screen edge. Desktop doesn't pan.
 - **Walks**: the URL is the truth. `PATHS` maps paths to `CloseUp`s; a state machine (`view` = settled shot,
   `walk` = `{ from, to, framing, playing, ended }`, adjusted *during render* so `set-state-in-effect` stays
   happy) starts a walk when path and view disagree. **Every walk starts or ends at the overview** (close-up →
@@ -120,7 +129,24 @@ a run, and there's no error boundary.
   path (`RUG`, via a scratch `trace-logo.mjs`) → distance field on texture unit 9 (`uRug`). **6 m long, 4.95 m
   across**, `RUG_POS (0.15, 7.6)`, `RUG_LEN 6.0`, head end 1.4 m before the tagline board. Floor hits inside
   become `M_RUG = 50` (matt pile, `rugSurface()`, `RUG_RED`), with a contact shadow outside the edge. Noise
-  inputs are relative to `RUG_POS` (`hash2` degenerates on big floats). **Awaiting the user's approval.**
+  inputs are relative to `RUG_POS` (`hash2` degenerates on big floats). Approved at 6 m and rendered 2026-09-16.
+- **Armour row** (2026-09-16/17, scenery for now; "maybe zoom in later"): three all-glass display cases
+  (`DESIGN = 2`; 0 = open alcoves and 1 = steel-fronted cases are still in the code) in a row against the
+  **left wall**, `ROW_Z = 16.6`, row frame `rowLocal()` (x along the wall, + towards the door; z out into the
+  hall), bay pitch 1.1 m. Each: thin steel frame, base and lid, lit two-step plinth (`M_LED`), light strips up
+  the front posts, lit slats in the back panel (emissive `M_BAY_BACK`), a header light panel sampled directly
+  by `bayLight()` (`M_DOWNLIGHT`, `BAY_LE`), glass `M_PANE` (fresnel reflect / tinted pass-through; shadow
+  rays skip panes via `skipPanes`). Suits are SDF mannequins (`mannequin()`, 180-step march, sofa-style
+  3 mm acceptance) + per-suit extras: **Iron Man Mark VII** (bay 2, nearest the door: `ironPlates()`,
+  reactor well and eye slits `M_SUIT_GLOW`, painted seams), **Miles Morales** (bay 1: red `webbing()`,
+  the rug's spider field on the chest, red fingertips/soles), **Batman** (bay 0: `batExtras()`, `suitCape()`
+  with folds, `batShape` emblem). Materials `M_BAY … M_CAPE` (51–59). Colour zones in `suitSurface()`.
+- **Vines** (ref: a Pinterest photo of climbing roses on a stone cottage): a heightfield relief on the left
+  wall (`vineT`: woody stems `vineLane`, ovate leaves `vineLeaf` on three 5 cm grids, roses `vineRoseT` in
+  cluster-noise patches), a mass at the ceiling, strands over the row stopping ≥ 10 cm above the cases,
+  curtains to the floor either side (`vineFrameHW/Top/Front`). `M_VINE = 60`, one inlined march in `vines()`
+  (the first version took the driver 11 min to compile; now ~4 min, then the AMD Vulkan pipeline cache makes
+  it instant, so a run's first job can look stuck). Leaves are relief, nothing sticks out; fine from the door.
 
 ## The renderer (`tools/studio-render/`)
 - `index.html`: one WebGL2 fragment shader path tracer, progressive accumulation into ping-pong float textures,
@@ -159,15 +185,21 @@ a run, and there's no error boundary.
 - **Workflow**: edit → `--preview` of **both framings** → look (tile video frames with ffmpeg `select`/`tile`)
   → agree placement with the user → full render. (A whole 3 h run was thrown away when the user moved the easel
   after it started.)
-- **Cost (RX 6950 XT, 2026-09-16, four shots): ≈ 3 h for everything.** Stills 18–39 s. Loops (landscape /
-  portrait): overview 1041 / 747 s, music 419 / 355, laptop 932 / 269, easel 815 / 174. Walks ≈ 400 s (music),
-  ≈ 680 s (laptop), ≈ 620 s (easel) each in landscape; ~70 % of that in portrait. Exposures landscape
-  1.877 / 1.831 / 1.759 / 1.446, portrait 1.996 / 1.941 / 1.842 / 1.464 (overview / music / laptop / easel).
+- **Cost (RX 6950 XT). Before the armour row (2026-09-16): ≈ 3 h for everything.** Stills 18–39 s. Loops
+  (landscape / portrait): overview 1041 / 747 s, music 419 / 355, laptop 932 / 269, easel 815 / 174. Walks
+  ≈ 400 s (music), ≈ 680 s (laptop), ≈ 620 s (easel) each in landscape; ~70 % of that in portrait.
+  **With the row + vines (2026-09-17) frames that see them cost ~2.5×**: overview still 80 s, loop 1979 s
+  (wide portrait: 152 s + 2734 s), easel 106 s + 1116 s, walks 1097 (music) / 1610 (laptop) / 1903 (easel) s
+  landscape, ~70 % in portrait; the run `--only overview,easel,walk` + portrait `overview,music,easel,walk`
+  took **6 h 20 min**. A full re-render is now ≈ 8 h; budget accordingly. Exposures landscape
+  1.976 / 1.831 / 1.759 / 1.631, portrait 1.988 / 1.970 / 1.842 / 1.491 (overview / music / laptop / easel).
+  The laptop close-ups (both) and the landscape music close-up predate the row (they can't see it).
 - **What a change costs**: overlay HTML/CSS → nothing. Walk path/easing → `--only walk`. A close-up's camera →
   `--only <shot>,walk-<shot>`. Candle strength/colour/flicker → post-only but every frame, i.e. a full render
   (preview with `studio.grade` in seconds). Something the overview sees → overview + walks + any close-up that
-  sees it. The rug → `--only overview,music,walk` (≈ 2½ h; the laptop close-up can't see the floor, the easel
-  faces away).
+  sees it. The rug → `--only overview,music,walk` (the laptop close-up can't see the floor, the easel faces
+  away). The armour row / vines → `--only overview,easel,walk` (the easel's landscape close-up has the row
+  ~27° left of its axis; music and laptop close-ups can't see it).
 - **Cameras** (`render.mjs`): overview `pos [0, 1.6, 0]` down +z, fov 58 landscape / 80 portrait. Music landscape
   `[2.0, 1.6, 6.0] → [2.451, 1.05, 9.936]` fov 30.47, portrait `[1.6, 1.6, 6.0] → [2.67, 1.233, 9.837]` fov
   51.53. Laptop landscape `[-0.764, 1.4, 10.708] → [-1.6966, 0.4231, 12.1826]` fov 30.75, portrait
@@ -190,6 +222,10 @@ a run, and there's no error boundary.
 - **Don't edit `index.html` while a render runs** — each job reloads it from disk, so later jobs change. Check
   first: `Get-CimInstance Win32_Process` filtered on the command line for `render.mjs`. (`ps -W`/`wmic` from Git
   Bash misreport; rely on a background task's exit notification.)
+- **Don't render anything else on the GPU while a full render runs.** Preview stills from a scratch copy
+  (≈ 3 min each under contention) alongside the 2026-09-16 rug render ended it with `GL error 37442`
+  (WebGL context lost) at the start of a job, ≈ 1½ h in. Each job is its own Chrome, so the finished
+  files survived; the run's JSON rewrite didn't happen. Do preview work before or after, never during.
 - **A render overwrites the uncommitted assets in place**, so a bad run costs the last good files; frame 0 of a
   loop MP4 is the still at video quality if a stand-in is needed. Commit renders promptly.
 - **Mid-render the dev site is inconsistent**: new images with old cameras until `studio-scene.json` is written
@@ -212,8 +248,8 @@ a run, and there's no error boundary.
 - **An overlay must not draw a point behind the camera** — `project()` returns a mirrored position. Guard with
   `z > 0` (`MusicCorner` checks the record and the board separately).
 - **Effects that decorate DOM inside a conditionally drawn overlay need the condition in their deps** (the board
-  remounts after being behind the camera; without `boardInView` in the deps the prints went grey — the
-  uncommitted fix).
+  remounts after being behind the camera; without `boardInView` in the deps the prints went grey; fixed in
+  `8ce8c73`).
 - CSS `columns` in a fixed-height box doesn't balance — use a grid with `grid-auto-rows: 1fr`.
 - `render.mjs` progress uses `\r`: watch logs with `sed -u 's/\r/\n/g'`, not `tr`.
 - `ffmpeg-static`'s install script may warn under npm 11's allowScripts; if `ffmpeg.exe` is missing, run

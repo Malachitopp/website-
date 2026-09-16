@@ -13,6 +13,12 @@
 //   studio-scene.json                         every camera (frame by frame for the walks) and the
 //                                             points in the scene the page pins its live overlays to
 //
+// The portrait overview (still and loop) is rendered wider than the phone's frame — the same
+// camera and height, about 100° across instead of the frame's 46° — so the page can be swiped to
+// look along the walls; the close-ups and the walks stay at the frame's size, and the middle of
+// the wide picture is exactly the frame. The scene file says how wide under that framing's
+// overviewSize (absent where the overview is just the frame).
+//
 // Loops only re-render the patches of the frame that move (see loopFrame in index.html); walk
 // frames are whole renders. Run from the repo root:
 //
@@ -89,6 +95,10 @@ const framings = {
     easel: { pos: [-3.3659, 1.55, 9.3384], target: [-3.6378, 1.3, 10.8808], fov: 58 },
   },
 }
+// The phone's overview is rendered wider than its frame, 100° across, for looking around (see
+// usePan in Studio.tsx): the same height and vertical fov, so the frame is exactly its middle.
+const across = (size, fov, degrees) => [Math.round((size[1] * Math.tan((degrees * Math.PI) / 360)) / Math.tan((fov * Math.PI) / 360) / 2) * 2, size[1]]
+framings.portrait.overviewSize = across(framings.portrait.size, framings.portrait.overview.fov, 100) // 3324 × 2340
 // The close-ups, and how long the walk from the overview to each takes: the laptop and the easel
 // are both about eleven metres from the door, the music corner about six.
 const CLOSE_UPS = { music: { seconds: 2 }, laptop: { seconds: 2.6 }, easel: { seconds: 2.8 } }
@@ -280,16 +290,19 @@ for (const key of chosen) {
 
   // a still, then its loop; exposure: the overview sets the level for the whole framing,
   // each close-up gets its own (the walk adapts from one to the other, as eyes do). A
-  // close-up's still is taken at the moment its walk in arrives.
-  const shot = (view, still, loop, level) =>
-    withStudio(framing, SPP, async (call) => {
+  // close-up's still is taken at the moment its walk in arrives. The overview may be wider than
+  // the frame (overviewSize); its loop is rendered in the same Chrome, so frame 0 is the still.
+  const shot = (view, still, loop, level) => {
+    const size = (view === 'overview' && framing.overviewSize) || framing.size
+    return withStudio({ ...framing, size }, SPP, async (call) => {
       const info = await call('still', { camera: framing[view], time: CLOSE_UPS[view]?.seconds ?? 0, exposure: level })
       writeFileSync(join(outDir, still), decode(info.jpeg))
-      console.log(`${still}: ${framing.size.join('×')}, ${SPP} spp in ${info.renderMs} ms, exposure ${info.exposure.toFixed(3)} (auto ${info.autoExposure.toFixed(3)})`)
+      console.log(`${still}: ${size.join('×')}, ${SPP} spp in ${info.renderMs} ms, exposure ${info.exposure.toFixed(3)} (auto ${info.autoExposure.toFixed(3)})`)
       if (flag('--stats')) console.log(info.patches)
       if (loopFrames > 0) await video(loop, loopFrames, loopFrames / 6, 20, (i) => call('loopFrame', i, loopFrames))
       return info
     })
+  }
 
   if (only.includes('overview')) exposure.overview = (await shot('overview', name(`studio-${key}.jpg`), name(`studio-${key}.mp4`))).exposure
   for (const view of Object.keys(CLOSE_UPS)) {
@@ -325,6 +338,7 @@ for (const key of chosen) {
 
   scene[key] = {
     size: framing.size,
+    ...(framing.overviewSize && { overviewSize: framing.overviewSize }),
     exposure,
     overview: lookAt(framing.overview),
     ...Object.fromEntries(Object.keys(CLOSE_UPS).map((view) => [view, lookAt(framing[view])])),

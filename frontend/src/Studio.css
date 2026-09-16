@@ -9,6 +9,13 @@
   &.is-setting-off {
     cursor: progress;
   }
+
+  /* on a phone the overview is wider than the screen and slides under a finger (see usePan in
+     Studio): the browser mustn't take the drag for a scroll */
+  &.is-wide {
+    touch-action: none;
+    cursor: grab;
+  }
 }
 
 /* the rendered shots: the still, its loop and the walks, all exactly over each other; they
